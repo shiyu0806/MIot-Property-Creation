@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Result files (contain runtime data)
+miot_create_result.json
+
+# WorkBuddy internal
+.workbuddy/
