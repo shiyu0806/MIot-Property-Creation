@@ -15,11 +15,23 @@
 
 ### 1. 安装依赖
 
+**macOS / Linux：**
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install openpyxl requests
 ```
+
+**Windows：**
+
+```cmd
+python -m venv .venv
+.venv\Scripts\activate
+pip install openpyxl requests
+```
+
+> 💡 如果 `python3` 命令不存在，尝试 `python`。虚拟环境激活后，后续命令统一使用 `python`（不再需要 `.venv/bin/python` 前缀）。
 
 ### 2. 获取 Cookie
 
@@ -35,6 +47,8 @@ pip install openpyxl requests
 
 ### 导出属性
 
+**macOS / Linux：**
+
 ```bash
 .venv/bin/python miot_export_template.py \
   --pid 33257 \
@@ -43,6 +57,19 @@ pip install openpyxl requests
   --ph '你的xiaomiiot_ph' \
   --userid 1097752639
 ```
+
+**Windows：**
+
+```cmd
+.venv\Scripts\python miot_export_template.py ^
+  --pid 33257 ^
+  --model uwize.switch.yzw07 ^
+  --token "你的serviceToken" ^
+  --ph "你的xiaomiiot_ph" ^
+  --userid 1097752639
+```
+
+> 💡 激活虚拟环境后可直接用 `python` 代替 `.venv/bin/python` 或 `.venv\Scripts\python`。
 
 **参数说明：**
 
@@ -69,15 +96,27 @@ pip install openpyxl requests
 
 ### 修改并创建
 
-```bash
-# 1. 打开导出的 Excel，在「公共配置」Sheet 中修改 pdId 和 model
-# 2. 可选：删掉不需要的属性行
+1. 打开导出的 Excel，在「公共配置」Sheet 中修改 pdId 和 model
+2. 可选：删掉不需要的属性行
 
-# 3. 干跑验证
+**macOS / Linux：**
+
+```bash
+# 干跑验证
 .venv/bin/python miot_create_properties.py --excel MIoT_模板_uwize_switch_yzw07.xlsx --dry-run
 
-# 4. 正式创建
+# 正式创建
 .venv/bin/python miot_create_properties.py --excel MIoT_模板_uwize_switch_yzw07.xlsx --skip-verify -y
+```
+
+**Windows：**
+
+```cmd
+:: 干跑验证
+.venv\Scripts\python miot_create_properties.py --excel MIoT_模板_uwize_switch_yzw07.xlsx --dry-run
+
+:: 正式创建
+.venv\Scripts\python miot_create_properties.py --excel MIoT_模板_uwize_switch_yzw07.xlsx --skip-verify -y
 ```
 
 ---
@@ -115,6 +154,8 @@ pip install openpyxl requests
 
 ### 运行
 
+**macOS / Linux：**
+
 ```bash
 # 查看产品服务列表
 .venv/bin/python miot_create_properties.py --list-services
@@ -133,6 +174,28 @@ pip install openpyxl requests
 
 # 使用指定的 Excel 文件
 .venv/bin/python miot_create_properties.py --excel MIoT_模板_uwize_switch_yzw07.xlsx --dry-run
+```
+
+**Windows：**
+
+```cmd
+:: 查看产品服务列表
+.venv\Scripts\python miot_create_properties.py --list-services
+
+:: 干跑检查（不实际创建）
+.venv\Scripts\python miot_create_properties.py --dry-run
+
+:: 正式创建（逐条确认）
+.venv\Scripts\python miot_create_properties.py --skip-verify
+
+:: 跳过确认直接创建
+.venv\Scripts\python miot_create_properties.py --skip-verify -y
+
+:: 只创建指定 siid 下的属性
+.venv\Scripts\python miot_create_properties.py --skip-verify --siid 13
+
+:: 使用指定的 Excel 文件
+.venv\Scripts\python miot_create_properties.py --excel MIoT_模板_uwize_switch_yzw07.xlsx --dry-run
 ```
 
 ## 服务匹配优先级
