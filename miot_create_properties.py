@@ -255,7 +255,7 @@ def build_request_body(prop: dict, config: dict, service_info: dict = None) -> d
         "access": parse_access(prop.get("access") or config.get("access", "read,write,notify")),
         "source": safe_int(prop.get("source") or config.get("source"), 4),
         "name": str(prop.get("name", "")),
-        "gattAccess": parse_access(config.get("gattAccess", "read,write,notify")),
+        "gattAccess": parse_access(prop.get("access") or config.get("access", "read,write,notify")),
         "version": safe_int(config.get("version"), 1),
         "status": safe_int(config.get("status"), 0),
         "siid": safe_int(siid, 0),

@@ -200,7 +200,7 @@ COLUMNS = [
     ("value_range_step",  "value_range_step",  14, "数值步长\n（仅number类型）",                     False),
     ("service_name",      "service_name",      20, "服务英文名\n如: switch, jog-delay-time",         False),
     ("siid",              "siid",               8, "服务ID（备选）\n直接指定siid，填了则忽略service匹配", False),
-    ("access",            "access",            20, "访问权限\n默认: read,write,notify",              False),
+    ("access",            "access",            20, "访问权限\n默认: read,write,notify\n（gattAccess自动等同于access）",              False),
 ]
 
 
@@ -279,8 +279,8 @@ def write_config_sheet(ws2, args):
         ["status",       0,            "状态（默认0）"],
         ["source",       4,            "来源（默认4）"],
         ["standard",     "false",      "是否标准属性（默认false）"],
-        ["gattAccess",   "read,write,notify", "BLE访问权限（默认read,write,notify）"],
-        ["access",       "read,write,notify", "默认访问权限，属性定义中可单独覆盖"],
+        # gattAccess 已自动等同于 access，无需单独配置
+        ["access",       "read,write,notify", "默认访问权限，属性定义中可单独覆盖\n（gattAccess自动等同于access，无需单独配置）"],
     ]
 
     for row_idx, (key, val, desc) in enumerate(configs, 2):

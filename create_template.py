@@ -44,7 +44,7 @@ columns = [
     # ── 可选 ──
     ("service_name",      20, "服务英文名\n如: switch, jog-delay-time\n与service_desc配合可精确区分同名服务", False),
     ("siid",               8, "服务ID（备选）\n直接指定siid，填了则忽略service匹配",    False),
-    ("access",            20, "访问权限\n默认: read,write,notify",                    False),
+    ("access",            20, "访问权限\n默认: read,write,notify\n（gattAccess自动等同于access）", False),
 ]
 
 for col_idx, (name, width, desc, required) in enumerate(columns, 1):
@@ -126,8 +126,8 @@ configs = [
     ["status",        0,   "状态（默认0）"],
     ["source",        4,   "来源（默认4）"],
     ["standard",      "false", "是否标准属性（默认false）"],
-    ["gattAccess",    "read,write,notify", "BLE访问权限（默认read,write,notify）"],
-    ["access",        "read,write,notify", "默认访问权限，属性定义中可单独覆盖"],
+    # gattAccess 已自动等同于 access，无需单独配置
+    ["access",        "read,write,notify", "默认访问权限，属性定义中可单独覆盖\n（gattAccess自动等同于access，无需单独配置）"],
 ]
 
 for row_idx, (key, val, desc) in enumerate(configs, 2):
@@ -162,7 +162,7 @@ instructions = [
     ["格式类型 format", "bool: 布尔开关（自动设valueList=[] valueRange=[]）\nuint8/uint16/uint32: 无符号整数\nint8/int16/int32: 有符号整数\nfloat: 浮点数\nstring: 字符串"],
     ["枚举值 value_list", "仅枚举类型填写\n格式: 数值:描述,数值:描述\n示例: 0:关闭,1:开启,2:待机"],
     ["数值范围 value_range", "仅数值类型填写，三个字段：\nmin: 最小值（默认0）\nmax: 最大值（默认65535）\nstep: 步长（默认1）"],
-    ["访问权限 access", "可选填，默认 read,write,notify\n多选用逗号分隔"],
+    ["访问权限 access", "可选填，默认 read,write,notify\n多选用逗号分隔\n💡 gattAccess 自动等同于 access，无需单独配置"],
     ["公共配置", "model、pdId、connectType 等全局参数统一在「公共配置」Sheet填写\n属性定义中无需重复填写"],
     ["Cookie获取", "1. 登录 iot.mi.com\n2. F12 → Application → Cookies\n3. 复制 serviceToken 和 xiaomiiot_ph 的值"],
     ["脚本命令", "# 查看服务列表\npython3 miot_create_properties.py --list-services\n# 干跑检查\npython3 miot_create_properties.py --dry-run\n# 正式创建\npython3 miot_create_properties.py --skip-verify -y"],
