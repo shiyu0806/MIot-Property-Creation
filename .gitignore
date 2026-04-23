@@ -15,3 +15,8 @@ miot_create_result.json
 
 # WorkBuddy internal
 .workbuddy/
+# 导出产物
+MIoT_模板_*.xlsx
+MIoT_模板_*.json
+# 创建结果
+miot_create_result.json

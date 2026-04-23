@@ -1,6 +1,6 @@
 # MIoT Property Creation
 
-小米 MIoT 平台设备属性批量创建工具。从 Excel 读取属性定义，自动匹配服务并批量创建属性。
+小米 MIoT 平台设备属性批量创建工具。从 Excel 读取属性定义，自动匹配服务并批量创建属性。支持从已有产品导出属性模板，快速复用到新产品。
 
 ## 功能
 
@@ -9,6 +9,7 @@
 - 📋 支持 bool / 数值型 / 枚举型 / string 多种属性格式
 - 🔄 通用设计 — 换产品只需改 Excel 公共配置
 - 🧪 支持 dry-run 预检
+- 📤 **一键导出** — 从已有产品抓取全部属性，生成可复用 Excel 模板
 
 ## 快速开始
 
@@ -20,7 +21,72 @@ source .venv/bin/activate
 pip install openpyxl requests
 ```
 
-### 2. 配置 Excel
+### 2. 获取 Cookie
+
+1. 登录 [iot.mi.com](https://iot.mi.com)
+2. F12 → Application → Cookies
+3. 复制 `serviceToken` 和 `xiaomiiot_ph` 的值
+
+---
+
+## 方式一：从已有产品导出模板（推荐）
+
+如果你有一个已经配好属性的产品，可以直接导出它的所有属性，生成 Excel 模板后复用到新产品。
+
+### 导出属性
+
+```bash
+.venv/bin/python miot_export_template.py \
+  --pid 33257 \
+  --model uwize.switch.yzw07 \
+  --token '你的serviceToken' \
+  --ph '你的xiaomiiot_ph' \
+  --userid 1097752639
+```
+
+**参数说明：**
+
+| 参数 | 说明 |
+|------|------|
+| `--pid` | 来源产品 ID（已有属性的产品） |
+| `--model` | 来源产品型号 |
+| `--token` | serviceToken（Cookie 获取） |
+| `--ph` | xiaomiiot_ph（Cookie 获取） |
+| `--userid` | 小米账号用户ID |
+| `-o` | 输出文件路径（默认自动生成） |
+| `--json` | 同时输出原始 JSON 数据 |
+| `--delay` | 请求间隔秒数（默认 0.3） |
+
+### 生成的 Excel
+
+导出后自动生成包含三个 Sheet 的 Excel 文件：
+
+| Sheet | 内容 |
+|-------|------|
+| **属性定义** | 已自动填好所有属性的 name/description/format/service_desc/value_list/value_range/access |
+| **公共配置** | Cookie 已预填，**需修改 pdId 和 model 为目标产品** |
+| **原始数据参考** | 来源产品的服务列表 + 完整属性元数据，供参考 |
+
+### 修改并创建
+
+```bash
+# 1. 打开导出的 Excel，在「公共配置」Sheet 中修改 pdId 和 model
+# 2. 可选：删掉不需要的属性行
+
+# 3. 干跑验证
+.venv/bin/python miot_create_properties.py --excel MIoT_模板_uwize_switch_yzw07.xlsx --dry-run
+
+# 4. 正式创建
+.venv/bin/python miot_create_properties.py --excel MIoT_模板_uwize_switch_yzw07.xlsx --skip-verify -y
+```
+
+---
+
+## 方式二：手动填写模板
+
+如果没有参照产品，可以使用空白模板手动填写。
+
+### 配置 Excel
 
 打开 `MIoT_属性创建模板.xlsx`，填写两个 Sheet：
 
@@ -47,29 +113,26 @@ pip install openpyxl requests
 | siid | 可选 | 直接指定服务ID |
 | access | 可选 | 默认 read,write,notify |
 
-### 3. 获取 Cookie
-
-1. 登录 [iot.mi.com](https://iot.mi.com)
-2. F12 → Application → Cookies
-3. 复制 `serviceToken` 和 `xiaomiiot_ph` 的值
-
-### 4. 运行
+### 运行
 
 ```bash
 # 查看产品服务列表
-python miot_create_properties.py --list-services
+.venv/bin/python miot_create_properties.py --list-services
 
 # 干跑检查（不实际创建）
-python miot_create_properties.py --dry-run
+.venv/bin/python miot_create_properties.py --dry-run
 
 # 正式创建（逐条确认）
-python miot_create_properties.py --skip-verify
+.venv/bin/python miot_create_properties.py --skip-verify
 
 # 跳过确认直接创建
-python miot_create_properties.py --skip-verify -y
+.venv/bin/python miot_create_properties.py --skip-verify -y
 
 # 只创建指定 siid 下的属性
-python miot_create_properties.py --skip-verify --siid 13
+.venv/bin/python miot_create_properties.py --skip-verify --siid 13
+
+# 使用指定的 Excel 文件
+.venv/bin/python miot_create_properties.py --excel MIoT_模板_uwize_switch_yzw07.xlsx --dry-run
 ```
 
 ## 服务匹配优先级
@@ -96,12 +159,20 @@ python miot_create_properties.py --skip-verify --siid 13
 
 | 文件 | 说明 |
 |------|------|
-| `miot_create_properties.py` | 主脚本 — 读取 Excel 并批量创建属性 |
-| `create_template.py` | 模板生成脚本 — 生成 Excel 模板 |
-| `MIoT_属性创建模板.xlsx` | Excel 模板 — 属性定义 + 公共配置 + 填写说明 |
+| `miot_export_template.py` | 📤 导出工具 — 从已有产品抓取属性，生成可复用 Excel 模板 |
+| `miot_create_properties.py` | 📥 创建工具 — 读取 Excel 并批量创建属性 |
+| `create_template.py` | 📄 模板生成脚本 — 生成空白 Excel 模板 |
+| `MIoT_属性创建模板.xlsx` | 📋 空白 Excel 模板 — 属性定义 + 公共配置 + 填写说明 |
+
+## 典型工作流
+
+```
+已有产品 → miot_export_template.py → Excel 模板 → 修改 pdId/model → miot_create_properties.py → 新产品
+```
 
 ## 注意事项
 
 - Cookie 有有效期，过期需重新获取
 - 验证接口（verify）返回 405，建议使用 `--skip-verify` 跳过
 - 同一服务下属性名（name）不可重复
+- 导出模板后，务必在公共配置中修改 pdId 和 model 为目标产品
