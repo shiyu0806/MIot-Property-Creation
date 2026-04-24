@@ -20,3 +20,7 @@ MIoT_模板_*.xlsx
 MIoT_模板_*.json
 # 创建结果
 miot_create_result.json
+# 打包产物
+build/
+dist/
+*.spec

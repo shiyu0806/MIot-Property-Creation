@@ -390,8 +390,8 @@ class MIoTMainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("MIoT 属性工具")
-        self.setMinimumSize(800, 650)
-        self.resize(900, 700)
+        self.setMinimumSize(960, 800)
+        self.resize(960, 850)
 
         # 状态
         self.export_worker = None
@@ -506,7 +506,7 @@ class MIoTMainWindow(QMainWindow):
         left_layout.addLayout(btn_layout)
 
         left_layout.addStretch()
-        left.setFixedWidth(420)
+        left.setFixedWidth(460)
 
         # 右侧：日志
         right = QWidget()
@@ -547,6 +547,18 @@ class MIoTMainWindow(QMainWindow):
         excel_layout.addWidget(btn_choose)
         grp_excel.setLayout(excel_layout)
         left_layout.addWidget(grp_excel)
+
+        # 产品信息（可覆盖 Excel 中的配置）
+        grp_product = QGroupBox("产品信息（可覆盖 Excel 中的配置）")
+        form_product = QFormLayout()
+        self.crt_pid = QLineEdit()
+        self.crt_pid.setPlaceholderText("留空则使用 Excel 中的配置")
+        self.crt_model = QLineEdit()
+        self.crt_model.setPlaceholderText("留空则使用 Excel 中的配置")
+        form_product.addRow("产品ID (pdId):", self.crt_pid)
+        form_product.addRow("产品型号 (model):", self.crt_model)
+        grp_product.setLayout(form_product)
+        left_layout.addWidget(grp_product)
 
         # Cookie（可从 Excel 读取，也可手动覆盖）
         grp_cookie = QGroupBox("Cookie（可覆盖 Excel 中的配置）")
@@ -611,7 +623,7 @@ class MIoTMainWindow(QMainWindow):
 
         left_layout.addLayout(btn_layout)
         left_layout.addStretch()
-        left.setFixedWidth(420)
+        left.setFixedWidth(460)
 
         # 右侧：日志
         right = QWidget()
@@ -773,6 +785,12 @@ class MIoTMainWindow(QMainWindow):
             config["xiaomiiot_ph"] = self.crt_ph.text().strip()
         if self.crt_userid.text().strip():
             config["userId"] = self.crt_userid.text().strip()
+
+        # 手动产品信息覆盖
+        if self.crt_pid.text().strip():
+            config["pdId"] = self.crt_pid.text().strip()
+        if self.crt_model.text().strip():
+            config["model"] = self.crt_model.text().strip()
 
         # 检查必填
         missing = []
