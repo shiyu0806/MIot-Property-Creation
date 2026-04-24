@@ -23,15 +23,15 @@ source .venv/bin/activate
 pip install openpyxl requests
 ```
 
-**Windows：**
+**Windows（PowerShell）：**
 
-```cmd
+```powershell
 python -m venv .venv
 .venv\Scripts\activate
 pip install openpyxl requests
 ```
 
-> 💡 如果 `python3` 命令不存在，尝试 `python`。虚拟环境激活后，后续命令统一使用 `python`（不再需要 `.venv/bin/python` 前缀）。
+> 💡 如果 `python3` 命令不存在，尝试 `python`。虚拟环境激活后，后续命令统一使用 `python`（不再需要 `.venv/bin/python` 或 `.venv\Scripts\python` 前缀）。
 
 ### 2. 获取 Cookie
 
@@ -50,7 +50,7 @@ pip install openpyxl requests
 **macOS / Linux：**
 
 ```bash
-.venv/bin/python miot_export_template.py \
+python miot_export_template.py \
   --pid 33257 \
   --model uwize.switch.yzw07 \
   --token '你的serviceToken' \
@@ -58,18 +58,15 @@ pip install openpyxl requests
   --userid 1097752639
 ```
 
-**Windows：**
+**Windows（PowerShell）：**
 
-```cmd
-.venv\Scripts\python miot_export_template.py ^
-  --pid 33257 ^
-  --model uwize.switch.yzw07 ^
-  --token "你的serviceToken" ^
-  --ph "你的xiaomiiot_ph" ^
-  --userid 1097752639
+> ⚠️ PowerShell 中参数必须写在同一行，不支持 `\` 续行。含特殊字符的 token 建议用双引号包裹。
+
+```powershell
+python miot_export_template.py --pid 33257 --model uwize.switch.yzw07 --token "你的serviceToken" --ph "你的xiaomiiot_ph" --userid 1097752639
 ```
 
-> 💡 激活虚拟环境后可直接用 `python` 代替 `.venv/bin/python` 或 `.venv\Scripts\python`。
+> 💡 以上命令已激活虚拟环境，直接用 `python` 即可。如未激活，macOS 用 `.venv/bin/python`，Windows 用 `.venv\Scripts\python`。
 
 **参数说明：**
 
@@ -103,20 +100,20 @@ pip install openpyxl requests
 
 ```bash
 # 干跑验证
-.venv/bin/python miot_create_properties.py --excel MIoT_模板_uwize_switch_yzw07.xlsx --dry-run
+python miot_create_properties.py --excel MIoT_模板_uwize_switch_yzw07.xlsx --dry-run
 
 # 正式创建
-.venv/bin/python miot_create_properties.py --excel MIoT_模板_uwize_switch_yzw07.xlsx --skip-verify -y
+python miot_create_properties.py --excel MIoT_模板_uwize_switch_yzw07.xlsx --skip-verify -y
 ```
 
-**Windows：**
+**Windows（PowerShell）：**
 
-```cmd
-:: 干跑验证
-.venv\Scripts\python miot_create_properties.py --excel MIoT_模板_uwize_switch_yzw07.xlsx --dry-run
+```powershell
+# 干跑验证
+python miot_create_properties.py --excel MIoT_模板_uwize_switch_yzw07.xlsx --dry-run
 
-:: 正式创建
-.venv\Scripts\python miot_create_properties.py --excel MIoT_模板_uwize_switch_yzw07.xlsx --skip-verify -y
+# 正式创建
+python miot_create_properties.py --excel MIoT_模板_uwize_switch_yzw07.xlsx --skip-verify -y
 ```
 
 ---
@@ -154,48 +151,26 @@ pip install openpyxl requests
 
 ### 运行
 
-**macOS / Linux：**
+以下命令默认已激活虚拟环境（直接用 `python`）。如未激活，macOS 用 `.venv/bin/python`，Windows 用 `.venv\Scripts\python`。
 
 ```bash
 # 查看产品服务列表
-.venv/bin/python miot_create_properties.py --list-services
+python miot_create_properties.py --list-services
 
 # 干跑检查（不实际创建）
-.venv/bin/python miot_create_properties.py --dry-run
+python miot_create_properties.py --dry-run
 
 # 正式创建（逐条确认）
-.venv/bin/python miot_create_properties.py --skip-verify
+python miot_create_properties.py --skip-verify
 
 # 跳过确认直接创建
-.venv/bin/python miot_create_properties.py --skip-verify -y
+python miot_create_properties.py --skip-verify -y
 
 # 只创建指定 siid 下的属性
-.venv/bin/python miot_create_properties.py --skip-verify --siid 13
+python miot_create_properties.py --skip-verify --siid 13
 
 # 使用指定的 Excel 文件
-.venv/bin/python miot_create_properties.py --excel MIoT_模板_uwize_switch_yzw07.xlsx --dry-run
-```
-
-**Windows：**
-
-```cmd
-:: 查看产品服务列表
-.venv\Scripts\python miot_create_properties.py --list-services
-
-:: 干跑检查（不实际创建）
-.venv\Scripts\python miot_create_properties.py --dry-run
-
-:: 正式创建（逐条确认）
-.venv\Scripts\python miot_create_properties.py --skip-verify
-
-:: 跳过确认直接创建
-.venv\Scripts\python miot_create_properties.py --skip-verify -y
-
-:: 只创建指定 siid 下的属性
-.venv\Scripts\python miot_create_properties.py --skip-verify --siid 13
-
-:: 使用指定的 Excel 文件
-.venv\Scripts\python miot_create_properties.py --excel MIoT_模板_uwize_switch_yzw07.xlsx --dry-run
+python miot_create_properties.py --excel MIoT_模板_uwize_switch_yzw07.xlsx --dry-run
 ```
 
 ## 服务匹配优先级
@@ -239,3 +214,4 @@ pip install openpyxl requests
 - 验证接口（verify）返回 405，建议使用 `--skip-verify` 跳过
 - 同一服务下属性名（name）不可重复
 - 导出模板后，务必在公共配置中修改 pdId 和 model 为目标产品
+- Windows PowerShell 中参数必须写在同一行，不支持 `\` 续行
