@@ -1,15 +1,48 @@
-# MIoT Property Creation
+# MIoT 平台工具（整合版）
 
-小米 MIoT 平台设备属性批量创建工具。从 Excel 读取属性定义，自动匹配服务并批量创建属性。支持从已有产品导出属性模板，快速复用到新产品。
+小米 MIoT 平台**服务层 + 属性层**一体化管理工具。
+GUI 版本（`miot_gui.py`）将两套功能整合为统一界面，命令行版本保持原有用法不变。
 
-## 功能
+## 功能概览
 
+### 🏗️ 服务层（`miot_service_core.py`）
+- 📋 **创建服务** — 从 Excel 批量同步服务，自动修正 siid 偏移
+- 📤 **导出服务** — 从平台拉取服务列表，可选同时导出属性/事件/动作详情
+
+### ⚙️ 属性层（`miot_create_properties.py` + `miot_export_template.py`）
 - 🔍 自动查询产品服务列表
 - 🎯 智能匹配属性到服务（service_desc / service_name / siid）
 - 📋 支持 bool / 数值型 / 枚举型 / string 多种属性格式
 - 🔄 通用设计 — 换产品只需改 Excel 公共配置
 - 🧪 支持 dry-run 预检
 - 📤 **一键导出** — 从已有产品抓取全部属性，生成可复用 Excel 模板
+
+## GUI 快速启动
+
+```bash
+# 安装依赖（含服务层 pandas 依赖）
+pip install openpyxl requests PyQt6 pandas
+
+# 启动整合版 GUI
+python miot_gui.py
+```
+
+GUI 界面分为两个大 Tab：
+
+| Tab | 子功能 |
+|-----|--------|
+| 🏗️ **服务层** | 📋 创建服务 / 📤 导出服务 |
+| ⚙️ **属性层** | 📤 导出模板 / 📥 创建属性 / 📄 生成模板 |
+
+### 服务层 Excel 格式
+
+服务 Excel 需包含两个 Sheet：
+- **产品配置**（Sheet 1）：列 `参数名` / `值`，包含 userId、xiaomiiot_ph、serviceToken、pdId、model
+- **服务列表**（Sheet 2）：列 `服务ID`、`服务名称`、`服务描述`、`标准化描述`、`是否标准服务`
+
+> 💡 可先用「导出服务」Tab 拉取已有服务生成模板，再按需修改后通过「创建服务」同步到新产品。
+
+---
 
 ## 快速开始
 
@@ -197,10 +230,12 @@ python miot_create_properties.py --excel MIoT_模板_uwize_switch_yzw07.xlsx --d
 
 | 文件 | 说明 |
 |------|------|
-| `miot_export_template.py` | 📤 导出工具 — 从已有产品抓取属性，生成可复用 Excel 模板 |
-| `miot_create_properties.py` | 📥 创建工具 — 读取 Excel 并批量创建属性 |
-| `create_template.py` | 📄 模板生成脚本 — 生成空白 Excel 模板 |
-| `MIoT_属性创建模板.xlsx` | 📋 空白 Excel 模板 — 属性定义 + 公共配置 + 填写说明 |
+| `miot_gui.py` | 🖥️ **整合版 GUI** — 服务层 + 属性层统一界面（推荐） |
+| `miot_service_core.py` | 🏗️ 服务层核心逻辑 — 查询/创建服务、修正 siid、导出服务 |
+| `miot_export_template.py` | 📤 属性导出工具 — 从已有产品抓取属性，生成可复用 Excel 模板 |
+| `miot_create_properties.py` | 📥 属性创建工具 — 读取 Excel 并批量创建属性 |
+| `create_template.py` | 📄 模板生成脚本 — 生成空白属性 Excel 模板 |
+| `MIoT_属性创建模板.xlsx` | 📋 空白属性 Excel 模板 — 属性定义 + 公共配置 + 填写说明 |
 
 ## 典型工作流
 
