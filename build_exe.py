@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 打包脚本（macOS / Windows 通用）
 macOS 输出 dist/MIoT平台工具.app
@@ -9,7 +10,14 @@ import sys
 import os
 import shutil
 
-APP_NAME = 'MIoT平台工具'
+# Windows 编码修复
+if sys.platform == 'win32':
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+
+# Windows 下 PyInstaller 打印中文会编码报错，用 ASCII 名
+APP_NAME = 'MIoT_Tool' if sys.platform == 'win32' else 'MIoT平台工具'
 
 def clean():
     """清理旧文件"""
