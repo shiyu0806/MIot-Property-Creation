@@ -39,9 +39,12 @@ def build():
         # PyQt6
         '--collect-all', 'PyQt6',
         '--collect-all', 'PyQt6-Qt6',
+        '--collect-all', 'PyQt6WebEngine',
         '--hidden-import', 'PyQt6.QtWidgets',
         '--hidden-import', 'PyQt6.QtCore',
         '--hidden-import', 'PyQt6.QtGui',
+        '--hidden-import', 'PyQt6.QtWebEngineWidgets',
+        '--hidden-import', 'PyQt6.QtWebEngineCore',
         # openpyxl
         '--collect-all', 'openpyxl',
         '--hidden-import', 'openpyxl',
