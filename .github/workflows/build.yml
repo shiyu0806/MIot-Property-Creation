@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
@@ -12,8 +15,10 @@ jobs:
         include:
           - os: macos-latest
             platform: macos
+            artifact: MIoT-macOS
           - os: windows-latest
             platform: windows
+            artifact: MIoT-Windows
 
     runs-on: ${{ matrix.os }}
 
@@ -29,33 +34,28 @@ jobs:
         run: |
           pip install pyinstaller openpyxl requests pandas PyQt6
 
-      - name: Build (macOS)
-        if: matrix.platform == 'macos'
-        run: |
-          python build_exe.py
-
-      - name: Build (Windows)
-        if: matrix.platform == 'windows'
-        run: |
-          python build_exe.py
+      - name: Build
+        run: python build_exe.py
 
       - name: Upload artifact (macOS)
         if: matrix.platform == 'macos'
         uses: actions/upload-artifact@v4
         with:
-          name: MIoT平台工具-macOS
+          name: ${{ matrix.artifact }}
           path: dist/MIoT平台工具.app
 
       - name: Upload artifact (Windows)
         if: matrix.platform == 'windows'
         uses: actions/upload-artifact@v4
         with:
-          name: MIoT平台工具-Windows
-          path: dist/MIoT平台工具.exe
+          name: ${{ matrix.artifact }}
+          path: dist/MIoT_Tool.exe
 
   release:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Download all artifacts
@@ -65,6 +65,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            MIoT平台工具-macOS/*
-            MIoT平台工具-Windows/*
+            MIoT-macOS/*
+            MIoT-Windows/*
           generate_release_notes: true
