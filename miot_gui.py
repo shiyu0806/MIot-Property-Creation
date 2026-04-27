@@ -1373,39 +1373,31 @@ class ExportAutomationTab(QWidget):
         left = QWidget(); left.setFixedWidth(460)
         lv = QVBoxLayout(left)
 
-        # 连接信息
-        grp_conn = QGroupBox("连接信息")
-        form_conn = QFormLayout()
-        self.token_edit = QLineEdit(); self.token_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.token_edit.setPlaceholderText("serviceToken")
-        self.ph_edit = QLineEdit(); self.ph_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.ph_edit.setPlaceholderText("xiaomiiot_ph")
-        self.userid_edit = QLineEdit(); self.userid_edit.setPlaceholderText("userId")
-        self.pid_edit = QLineEdit(); self.pid_edit.setPlaceholderText("pdId")
-        self.model_edit = QLineEdit(); self.model_edit.setPlaceholderText("如 gudi.switch.swy007")
-        chk = QCheckBox("显示 Cookie")
-        def toggle(c):
-            mode = QLineEdit.EchoMode.Normal if c else QLineEdit.EchoMode.Password
-            self.token_edit.setEchoMode(mode); self.ph_edit.setEchoMode(mode)
-        chk.toggled.connect(toggle)
-        form_conn.addRow("serviceToken:", self.token_edit)
-        form_conn.addRow("xiaomiiot_ph:", self.ph_edit)
-        form_conn.addRow("userId:", self.userid_edit)
-        form_conn.addRow("pdId:", self.pid_edit)
-        form_conn.addRow("产品型号 (model):", self.model_edit)
-        form_conn.addRow("", chk)
-        grp_conn.setLayout(form_conn)
-        lv.addWidget(grp_conn)
-
-        # 从 Excel 读取配置
-        grp_excel = QGroupBox("或从 Excel 读取配置")
+        # Excel 文件
+        grp_excel = QGroupBox("自动化 Excel（可选，用于补全配置）")
         ev = QHBoxLayout()
-        self.excel_edit = QLineEdit(); self.excel_edit.setPlaceholderText("选择自动化 Excel 文件")
+        self.excel_edit = QLineEdit(); self.excel_edit.setPlaceholderText("选择已有的自动化 Excel，自动读取配置")
         btn_xl = QPushButton("浏览...")
         btn_xl.clicked.connect(self._browse_excel)
         ev.addWidget(self.excel_edit); ev.addWidget(btn_xl)
         grp_excel.setLayout(ev)
         lv.addWidget(grp_excel)
+
+        # 产品信息覆盖
+        grp_prod = QGroupBox("产品信息（可覆盖 Excel 配置）")
+        form_prod = QFormLayout()
+        self.pid_edit = QLineEdit(); self.pid_edit.setPlaceholderText("留空使用 Excel 配置")
+        self.model_edit = QLineEdit(); self.model_edit.setPlaceholderText("留空使用 Excel 配置")
+        form_prod.addRow("产品ID (pdId):", self.pid_edit)
+        form_prod.addRow("产品型号 (model):", self.model_edit)
+        grp_prod.setLayout(form_prod)
+        lv.addWidget(grp_prod)
+
+        # Cookie 信息（自动填充 + 手动覆盖）
+        _, self.token_edit, self.ph_edit, self.userid_edit = _cookie_group(lv, "auto_exp")
+        self.token_edit.setPlaceholderText("留空使用 Excel 配置或已登录账号")
+        self.ph_edit.setPlaceholderText("留空使用 Excel 配置或已登录账号")
+        self.userid_edit.setPlaceholderText("留空使用 Excel 配置或已登录账号")
 
         # 按钮
         btn_row = QHBoxLayout()
@@ -1500,31 +1492,7 @@ class CreateAutomationTab(QWidget):
         left = QWidget(); left.setFixedWidth(460)
         lv = QVBoxLayout(left)
 
-        # 连接信息
-        grp_conn = QGroupBox("连接信息")
-        form_conn = QFormLayout()
-        self.token_edit = QLineEdit(); self.token_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.token_edit.setPlaceholderText("serviceToken")
-        self.ph_edit = QLineEdit(); self.ph_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.ph_edit.setPlaceholderText("xiaomiiot_ph")
-        self.userid_edit = QLineEdit(); self.userid_edit.setPlaceholderText("userId")
-        self.pid_edit = QLineEdit(); self.pid_edit.setPlaceholderText("pdId")
-        self.model_edit = QLineEdit(); self.model_edit.setPlaceholderText("如 gudi.switch.swy007")
-        chk = QCheckBox("显示 Cookie")
-        def toggle(c):
-            mode = QLineEdit.EchoMode.Normal if c else QLineEdit.EchoMode.Password
-            self.token_edit.setEchoMode(mode); self.ph_edit.setEchoMode(mode)
-        chk.toggled.connect(toggle)
-        form_conn.addRow("serviceToken:", self.token_edit)
-        form_conn.addRow("xiaomiiot_ph:", self.ph_edit)
-        form_conn.addRow("userId:", self.userid_edit)
-        form_conn.addRow("pdId:", self.pid_edit)
-        form_conn.addRow("产品型号 (model):", self.model_edit)
-        form_conn.addRow("", chk)
-        grp_conn.setLayout(form_conn)
-        lv.addWidget(grp_conn)
-
-        # 从 Excel 读取
+        # Excel 文件
         grp_excel = QGroupBox("自动化 Excel（包含配置 + 自动化列表）")
         ev = QHBoxLayout()
         self.excel_edit = QLineEdit(); self.excel_edit.setPlaceholderText("选择自动化 Excel 文件")
@@ -1533,6 +1501,22 @@ class CreateAutomationTab(QWidget):
         ev.addWidget(self.excel_edit); ev.addWidget(btn_xl)
         grp_excel.setLayout(ev)
         lv.addWidget(grp_excel)
+
+        # 产品信息覆盖
+        grp_prod = QGroupBox("产品信息（可覆盖 Excel 配置）")
+        form_prod = QFormLayout()
+        self.pid_edit = QLineEdit(); self.pid_edit.setPlaceholderText("留空使用 Excel 配置")
+        self.model_edit = QLineEdit(); self.model_edit.setPlaceholderText("留空使用 Excel 配置")
+        form_prod.addRow("产品ID (pdId):", self.pid_edit)
+        form_prod.addRow("产品型号 (model):", self.model_edit)
+        grp_prod.setLayout(form_prod)
+        lv.addWidget(grp_prod)
+
+        # Cookie 信息（自动填充 + 手动覆盖）
+        _, self.token_edit, self.ph_edit, self.userid_edit = _cookie_group(lv, "auto_crt")
+        self.token_edit.setPlaceholderText("留空使用 Excel 配置或已登录账号")
+        self.ph_edit.setPlaceholderText("留空使用 Excel 配置或已登录账号")
+        self.userid_edit.setPlaceholderText("留空使用 Excel 配置或已登录账号")
 
         # 选项
         grp_opt = QGroupBox("选项")
@@ -1550,11 +1534,11 @@ class CreateAutomationTab(QWidget):
         self.btn_create = QPushButton("🚀 创建自动化")
         self.btn_create.setObjectName("successBtn")
         self.btn_create.clicked.connect(self._start)
-        btn_row.addWidget(self.btn_create)
         self.btn_cancel = QPushButton("⏹ 取消")
         self.btn_cancel.setObjectName("dangerBtn")
         self.btn_cancel.clicked.connect(self._cancel)
         self.btn_cancel.setEnabled(False)
+        btn_row.addWidget(self.btn_create)
         btn_row.addWidget(self.btn_cancel)
         lv.addLayout(btn_row)
         lv.addStretch()

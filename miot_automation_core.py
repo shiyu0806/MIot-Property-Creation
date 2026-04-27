@@ -4,7 +4,8 @@ MIoT 自定义自动化核心模块
 API:
   - 查询自动化列表: GET /cgi-op/api/v1/productcenter/automation/list
   - 检查标准自动化: POST /cgi-op/api/v1/productcenter/automation/check/standard/automation (multipart)
-  - 保存 then（执行动作）: POST /cgi-op/api/v1/productcenter/automation/group/action/save (JSON)
+  - 保存 then 普通动作: POST /cgi-op/api/v1/productcenter/automation/action/save (JSON)
+  - 保存 then 组合动作: POST /cgi-op/api/v1/productcenter/automation/group/action/save (JSON, 扁平payload含actionList)
   - 保存 if（触发条件）: POST /cgi-op/api/v1/productcenter/automation/launch/save (JSON)
 
 自动化分两种类型:
@@ -64,6 +65,66 @@ def _replace_source_model(value: str, source_model: str, target_model: str) -> s
     if not value or not source_model or not target_model or source_model == target_model:
         return value
     return value.replace(source_model, target_model)
+
+
+def _fix_item_model(config: dict, item: dict):
+    """预处理：确保 item 中所有 model 相关字段使用目标产品的 model。
+    从 key/command 中提取源 model，替换 key/value/command/groupSceneDto 中的引用。
+    同时修正 item.model 为空的问题。
+    """
+    target_model = config.get("model", "")
+    if not target_model:
+        return
+
+    # 尝试从多个来源提取源 model
+    source_model = ""
+    command = item.get("command", "")
+    if command:
+        cmd_base = command.split(".set_properties")[0].split(".action")[0]
+        if cmd_base and cmd_base != target_model:
+            source_model = cmd_base
+    if not source_model:
+        key = item.get("key", "")
+        if key:
+            key_parts = key.split(".")
+            if len(key_parts) >= 4:
+                source_model_in_key = ".".join(key_parts[1:-2])
+                if source_model_in_key and source_model_in_key != target_model:
+                    source_model = source_model_in_key
+    if not source_model:
+        item_model = item.get("model", "")
+        if item_model and item_model != target_model:
+            source_model = item_model
+
+    if source_model:
+        # 替换 item 中所有字符串字段里的源 model
+        for k in ("command", "key", "model", "specRelate", "value"):
+            val = item.get(k, "")
+            if isinstance(val, str) and source_model in val:
+                item[k] = _replace_source_model(val, source_model, target_model)
+        # 替换 groupSceneDto 中的字段
+        gsd = item.get("groupSceneDto")
+        if isinstance(gsd, dict):
+            for k in ("command", "key", "model", "specRelate", "value"):
+                val = gsd.get(k, "")
+                if isinstance(val, str) and source_model in val:
+                    gsd[k] = _replace_source_model(val, source_model, target_model)
+        # 替换 actionList 中的 model
+        al = item.get("actionList")
+        if isinstance(al, list):
+            for action in al:
+                if isinstance(action, dict):
+                    for k in ("command", "model", "specRelate", "value"):
+                        val = action.get(k, "")
+                        if isinstance(val, str) and source_model in val:
+                            action[k] = _replace_source_model(val, source_model, target_model)
+                    if "pdId" in action:
+                        action["pdId"] = int(config.get("pdId", 0))
+
+    # 确保 model 字段是目标 model（即使没有源 model 也补上）
+    item_model = item.get("model", "")
+    if not item_model or item_model != target_model:
+        item["model"] = target_model
 
 
 def _parse_spec_type(spec_relate: str) -> str:
@@ -167,21 +228,18 @@ def _build_then_group_scene_dto(config: dict, auto_item: dict) -> dict:
     else:
         app_value_style = 0
 
-    command = auto_item.get("command", f"{model}.set_properties" if model else "")
+    # command 推断：specRelate=action.* → *.action, property.* → *.set_properties
+    if auto_item.get("command"):
+        command = auto_item["command"]
+    elif spec_relate.startswith("action."):
+        command = f"{model}.action" if model else ""
+    else:
+        command = f"{model}.set_properties" if model else ""
 
     # value: 执行动作的值
     value = auto_item.get("value", "")
     if not isinstance(value, str):
         value = json.dumps(value, ensure_ascii=False) if value else ""
-
-    # tgId: 组合动作 > 0，普通动作 = 0
-    tg_id = auto_item.get("tgId")
-    if tg_id is not None:
-        tg_id = int(tg_id) if str(tg_id).isdigit() else tg_id
-    elif has_action_list:
-        tg_id = 1  # 组合动作默认 tgId=1
-    else:
-        tg_id = 0
 
     group_scene_dto = {
         "pdId": pd_id,
@@ -200,10 +258,6 @@ def _build_then_group_scene_dto(config: dict, auto_item: dict) -> dict:
         "autoType": 1,
         "command": command,
     }
-
-    # tgId: 仅组合动作需要
-    if has_action_list and tg_id and int(tg_id) > 0:
-        group_scene_dto["tgId"] = int(tg_id)
 
     if has_action_list:
         # 组合动作：value=null, 含 actionList
@@ -250,11 +304,13 @@ def _build_if_group_scene_dto(config: dict, auto_item: dict) -> dict:
         "specType": spec_type,
         "siId": int(si_id) if str(si_id).isdigit() else si_id,
         "subIid": int(sub_iid) if str(sub_iid).isdigit() else sub_iid,
-        "autoType": int(auto_item.get("autoType", 0)),
+        "autoType": int(auto_item.get("autoType") or 0) if str(auto_item.get("autoType") or 0).lstrip("-").isdigit() else 0,
         "value": value,
     }
     # if 类型可能有额外字段
-    for extra_key in ("scId", "scIds", "src"):
+    # 注意：scId 是源产品的场景ID，创建新自动化时不应传入（目标产品不存在该scId）
+    # 只有更新时才需要传 scId
+    for extra_key in ("src",):
         if auto_item.get(extra_key) is not None:
             group_scene_dto[extra_key] = auto_item[extra_key]
     return group_scene_dto
@@ -267,6 +323,9 @@ def check_standard_automation(config: dict, auto_item: dict) -> dict:
     检查自动化是否匹配标准场景（multipart form 上传）
     根据 _trType 自动区分 then（执行动作）和 if（触发条件）
     """
+    # 预处理：确保 model 字段正确，替换 key/value 中的源 model
+    _fix_item_model(config, auto_item)
+
     tr_type = auto_item.get("_trType", "then")
     spec_relate = auto_item.get("specRelate", "")
     si_id, sub_iid = _parse_spec_relate(spec_relate)
@@ -295,11 +354,23 @@ def check_standard_automation(config: dict, auto_item: dict) -> dict:
             app_value_style = 4
         else:
             app_value_style = 0
-        auto_type = auto_item.get("autoType", 1)
-        command = auto_item.get("command", f"{model}.set_properties" if model else "")
+        auto_type = auto_item.get("autoType") or 1
+        if isinstance(auto_type, str):
+            auto_type = int(auto_type) if auto_type.strip().isdigit() else 1
+        # command 推断：specRelate=action.* → *.action, property.* → *.set_properties
+        if auto_item.get("command"):
+            command = auto_item["command"]
+        elif spec_relate.startswith("action."):
+            command = f"{model}.action" if model else ""
+        else:
+            command = f"{model}.set_properties" if model else ""
     else:
-        app_value_style = auto_item.get("appValueStyle", 0)
-        auto_type = auto_item.get("autoType", 0)
+        app_value_style = auto_item.get("appValueStyle") or 0
+        if isinstance(app_value_style, str):
+            app_value_style = int(app_value_style) if app_value_style.strip().isdigit() else 0
+        auto_type = auto_item.get("autoType") or 0
+        if isinstance(auto_type, str):
+            auto_type = int(auto_type) if auto_type.strip().isdigit() else 0
         command = auto_item.get("command", "")
 
     value = auto_item.get("value", "")
@@ -329,25 +400,24 @@ def check_standard_automation(config: dict, auto_item: dict) -> dict:
         fields["command"] = command
 
     if tr_type == "then":
-        # tgId: 仅组合动作需要
-        if has_action_list:
-            tg_id = auto_item.get("tgId")
-            if tg_id is not None:
-                tg_id = int(tg_id) if str(tg_id).isdigit() else tg_id
-            else:
-                tg_id = 1
-            fields["tgId"] = str(tg_id)
-
         if has_action_list:
             # 组合动作（appValueStyle=4）：value=null, 有 actionList
+            fields["value"] = "null"
+            # actionList: multipart 中传 JSON 字符串
+            fields["actionList"] = json.dumps(action_list, ensure_ascii=False)
+        elif app_value_style == 4:
+            # 聚合选值但没有 actionList → 自动从目标产品属性定义生成
+            action_list = generate_action_list(config, auto_item)
+            auto_item["actionList"] = action_list  # 缓存到 item 中供 save 使用
+            action_list = _fix_action_list_for_target(config, action_list)
             fields["value"] = "null"
             fields["actionList"] = json.dumps(action_list, ensure_ascii=False)
         else:
             # 普通动作（appValueStyle=0/1）：value 有值, 无 actionList
             fields["value"] = value
-
-    # if 类型额外字段
-    if tr_type == "if":
+    else:
+        # if 类型：value 有值, 有 key 等触发字段
+        fields["value"] = value
         key = auto_item.get("key", "")
         if key:
             fields["key"] = key
@@ -382,13 +452,49 @@ def check_standard_automation(config: dict, auto_item: dict) -> dict:
 
 # ─── 保存自动化 ────────────────────────────────────────────────
 
+def _fix_action_list_for_target(config: dict, action_list: list) -> list:
+    """修复 actionList 中子动作的字段，使其与目标产品匹配
+    - pdId → 目标 pdId
+    - model / command → 目标 model
+    - value 中的源 model 替换
+    - siId/subIid 保留（聚合选值子动作使用相同的 siid/piid）
+    """
+    target_pd_id = int(config.get("pdId", 0))
+    target_model = config.get("model", "")
+
+    for act in action_list:
+        if not isinstance(act, dict):
+            continue
+        # pdId 替换
+        act["pdId"] = target_pd_id
+        # model 替换
+        if target_model and act.get("model"):
+            source_model = act["model"]
+            if source_model != target_model:
+                for key in ("command", "model", "specRelate", "value"):
+                    val = act.get(key, "")
+                    if isinstance(val, str) and source_model in val:
+                        act[key] = _replace_source_model(val, source_model, target_model)
+                act["model"] = target_model
+        # 清理子动作中不应传的字段（服务端会自动分配）
+        for clean_key in ("saId", "tgId", "ctime", "status", "supportNative",
+                          "tmpValueTypes", "labVerifyStatus", "pdIds", "type",
+                          "title", "desc", "specVer"):
+            if clean_key in act:
+                del act[clean_key]
+    return action_list
+
+
 def save_automation(config: dict, auto_item: dict, is_update: bool = False) -> dict:
     """
     创建/更新自定义自动化（JSON body）
     then 普通动作 → /automation/action/save（无 groupSceneDto）
-    then 组合动作 → /automation/group/action/save（有 groupSceneDto + actionList）
+    then 组合动作 → /automation/group/action/save（扁平 payload 含 actionList）
     if（触发条件）→ /automation/launch/save（有 groupSceneDto）
     """
+    # 预处理：确保 model 字段正确，替换 key/value 中的源 model
+    _fix_item_model(config, auto_item)
+
     tr_type = auto_item.get("_trType", "then")
     spec_relate = auto_item.get("specRelate", "")
     si_id, sub_iid = _parse_spec_relate(spec_relate)
@@ -421,22 +527,35 @@ def save_automation(config: dict, auto_item: dict, is_update: bool = False) -> d
             app_value_style = 4
         else:
             app_value_style = 0
-        auto_type = auto_item.get("autoType", 1)
-        command = auto_item.get("command", f"{model}.set_properties" if model else "")
+        auto_type = auto_item.get("autoType") or 1
+        if isinstance(auto_type, str):
+            auto_type = int(auto_type) if auto_type.strip().isdigit() else 1
 
-        # tgId: 组合动作 > 0，普通动作 = 0
-        tg_id = auto_item.get("tgId")
-        if tg_id is not None:
-            tg_id = int(tg_id) if str(tg_id).isdigit() else tg_id
-        elif has_action_list:
-            tg_id = 1
+        # command 推断：
+        # specRelate=action.* → command={model}.action
+        # specRelate=property.* → command={model}.set_properties
+        if auto_item.get("command"):
+            command = auto_item["command"]
+        elif spec_relate.startswith("action."):
+            command = f"{model}.action" if model else ""
         else:
-            tg_id = 0
+            command = f"{model}.set_properties" if model else ""
+
+        # specRelate=action.* 时，value 格式为 {"siid":X,"aiid":Y,"in":[]}
+        # 不需要转成 [{"siid":X,"piid":Y,"value":Z}] 格式
+        if spec_relate.startswith("action.") and value:
+            # 确保 value 是 JSON 字符串
+            if not value.startswith("["):
+                # 已经是 {"siid":...} 格式，保持原样
+                pass
     else:
-        app_value_style = auto_item.get("appValueStyle", 0)
-        auto_type = auto_item.get("autoType", 0)
+        app_value_style = auto_item.get("appValueStyle") or 0
+        if isinstance(app_value_style, str):
+            app_value_style = int(app_value_style) if app_value_style.strip().isdigit() else 0
+        auto_type = auto_item.get("autoType") or 0
+        if isinstance(auto_type, str):
+            auto_type = int(auto_type) if auto_type.strip().isdigit() else 0
         command = auto_item.get("command", "")
-        tg_id = None
 
     payload = {
         "pdId": int(config.get("pdId", 0)),
@@ -459,42 +578,44 @@ def save_automation(config: dict, auto_item: dict, is_update: bool = False) -> d
         # then（执行动作）分两种子类型，使用不同 API：
         # 1. 普通动作（appValueStyle=0/1，无 actionList）：
         #    → /automation/action/save，无 groupSceneDto，无 tgId
+        #    子类型 a: specRelate=property.* → value=[{"siid":X,"piid":Y,"value":Z}]
+        #    子类型 b: specRelate=action.* → value={"siid":X,"aiid":Y,"in":[]}, command=*.action
         # 2. 组合动作（appValueStyle=4，有 actionList）：
-        #    → /automation/group/action/save，有 groupSceneDto + actionList + tgId
+        #    → /automation/group/action/save，扁平 payload 含 actionList，不传 groupSceneDto/tgId
         payload["command"] = command
 
         if has_action_list:
-            # 组合动作
+            # 组合动作：value=null, 含 actionList（扁平结构，不嵌套 groupSceneDto）
+            # 修复 actionList 中子动作的 pdId/model
+            action_list = _fix_action_list_for_target(config, action_list)
             payload["value"] = None
             payload["actionList"] = action_list
-            payload["tgId"] = tg_id
-            # groupSceneDto: 组合动作传 dict 对象
-            group_scene = auto_item.get("groupSceneDto")
-            if group_scene and isinstance(group_scene, dict):
-                payload["groupSceneDto"] = group_scene
-            elif group_scene and isinstance(group_scene, str):
-                try:
-                    payload["groupSceneDto"] = json.loads(group_scene)
-                except Exception:
-                    payload["groupSceneDto"] = group_scene
-            else:
-                payload["groupSceneDto"] = _build_then_group_scene_dto(config, auto_item)
 
             api = SAVE_THEN_GROUP_API
             params = _params(config)
         else:
-            # 普通动作：不传 groupSceneDto、tgId、actionList
-            payload["value"] = value
+            # 聚合选值但没有 actionList → 自动从目标产品属性定义生成
+            if app_value_style == 4:
+                action_list = generate_action_list(config, auto_item)
+                action_list = _fix_action_list_for_target(config, action_list)
+                payload["value"] = None
+                payload["actionList"] = action_list
 
-            api = SAVE_THEN_API
-            params = {**_params(config), "isUpdate": str(is_update).lower()}
+                api = SAVE_THEN_GROUP_API
+                params = _params(config)
+            else:
+                # 普通动作：不传 groupSceneDto、tgId、actionList
+                payload["value"] = value
+
+                api = SAVE_THEN_API
+                params = {**_params(config), "isUpdate": str(is_update).lower()}
     else:
         # if 类型: value 有值, 有 key 等触发字段
         payload["key"] = auto_item.get("key", "")
         payload["value"] = value
-        for extra_key in ("scId", "scIds", "src"):
-            if auto_item.get(extra_key) is not None:
-                payload[extra_key] = auto_item[extra_key]
+        # scId 是源产品场景ID，创建时不传（目标产品不存在），只传 src
+        if auto_item.get("src") is not None:
+            payload["src"] = auto_item["src"]
         # groupSceneDto
         group_scene = auto_item.get("groupSceneDto")
         if group_scene and isinstance(group_scene, dict):
@@ -505,10 +626,7 @@ def save_automation(config: dict, auto_item: dict, is_update: bool = False) -> d
         api = SAVE_IF_API
         params = {**_params(config), "isUpdate": str(is_update).lower()}
 
-    # 调试：打印实际发送的 payload
-    debug_info = f"  🔧 API: {api.replace(BASE, '')}\n"
-    debug_info += f"  🔧 Payload: {json.dumps(payload, ensure_ascii=False, default=str)[:500]}"
-    # 写入临时文件供调试
+    # 调试：写入临时文件
     try:
         with open(f"/tmp/miot_save_debug_{tr_type}.json", "w") as f:
             json.dump({"tr_type": tr_type, "api": api, "payload": payload}, f, ensure_ascii=False, default=str, indent=2)
@@ -525,6 +643,103 @@ def save_automation(config: dict, auto_item: dict, is_update: bool = False) -> d
     except Exception:
         raise RuntimeError(f"保存自动化 API 返回非 JSON (HTTP {resp.status_code}): "
                            f"{resp.text[:300] or '(空响应)'}")
+
+
+# ─── 查询属性定义（用于自动生成聚合选值的 actionList）──────────
+
+PROP_DEF_API = f"{BASE}/cgi-std/api/v1/functionDefine/getInstanceProperties"
+_prop_def_cache = {}  # {(userId, pdId): {(siid, piid): prop_info}}
+
+
+def get_property_definitions(config: dict, use_cache: bool = True) -> dict:
+    """查询产品的属性定义，返回 {(siid, piid): prop_info} 字典
+    prop_info 包含 name, type, format, valueList, valueRange 等
+    支持缓存，同一用户同一产品只查询一次
+    """
+    global _prop_def_cache
+    cache_key = (str(config.get("userId", "")), str(config.get("pdId", "")))
+    if use_cache and cache_key in _prop_def_cache:
+        return _prop_def_cache[cache_key]
+
+    resp = requests.get(
+        PROP_DEF_API,
+        params=_params(config),
+        cookies=_cookies(config),
+        headers=_headers(),
+        timeout=30,
+    )
+    try:
+        data = resp.json()
+    except Exception:
+        raise RuntimeError(f"查询属性定义 API 返回非 JSON (HTTP {resp.status_code}): "
+                           f"{resp.text[:300] or '(空响应)'}")
+
+    if data.get("status") != 200:
+        raise RuntimeError(f"查询属性定义失败: {data.get('message', data)}")
+
+    result = data.get("result") or data.get("data") or []
+    prop_map = {}
+    for p in result:
+        svcs = p.get("services", [])
+        siid = svcs[0].get("iid") if svcs else p.get("siid", 0)
+        piid = p.get("iid")
+        prop_map[(int(siid), int(piid))] = p
+    _prop_def_cache[cache_key] = prop_map
+    return prop_map
+
+
+def generate_action_list(config: dict, auto_item: dict) -> list:
+    """为聚合选值（appValueStyle=4）自动生成 actionList
+    基于 specRelate 中的 siid.piid 查询属性定义的枚举值列表
+    """
+    spec_relate = auto_item.get("specRelate", "")
+    parts = spec_relate.split(".")
+    if len(parts) < 3:
+        raise RuntimeError(f"specRelate 格式错误: {spec_relate}")
+
+    siid, piid = int(parts[1]), int(parts[2])
+    model = auto_item.get("model", config.get("model", ""))
+    pd_id = int(config.get("pdId", 0))
+
+    # 查询属性定义
+    prop_map = get_property_definitions(config)
+    prop_info = prop_map.get((siid, piid))
+    if not prop_info:
+        raise RuntimeError(f"未找到 siid={siid}, piid={piid} 的属性定义，无法生成 actionList")
+
+    value_list = prop_info.get("valueList", [])
+    if not value_list:
+        # 可能是数值型属性，不需要聚合选值
+        raise RuntimeError(f"siid={siid}, piid={piid} 没有枚举值列表(valueList)，不是聚合选值属性")
+
+    # 构建 actionList
+    action_list = []
+    for idx, v in enumerate(value_list):
+        action_item = {
+            "pdId": pd_id,
+            "intro": str(v.get("description", v.get("value", idx))),
+            "plugId": "",
+            "fwVer": "",
+            "mcuFwVer": "",
+            "platform": 0,
+            "attr": "",
+            "specRelate": spec_relate,
+            "model": model,
+            "appValueStyle": 4,
+            "specType": _parse_spec_type(spec_relate),
+            "siId": siid,
+            "subIid": piid,
+            "autoType": 1,
+            "command": f"{model}.set_properties" if model else "",
+            "value": json.dumps([{"siid": siid, "piid": piid, "value": v.get("value")}]),
+            "gid": 0,
+            "extra": "{}",
+            "rank": 10,
+            "ruleId": 0,
+        }
+        action_list.append(action_item)
+
+    return action_list
 
 
 # ─── 批量同步自动化 ────────────────────────────────────────────
@@ -582,15 +797,18 @@ def sync_automations(config: dict, auto_items: list,
                     val = gsd.get(key, "")
                     if isinstance(val, str) and source_model in val:
                         gsd[key] = _replace_source_model(val, source_model, target_model)
-            # 替换 actionList 中的 model
+            # 替换 actionList 中的 model 和 value
             al = item.get("actionList")
             if isinstance(al, list):
                 for action in al:
                     if isinstance(action, dict):
-                        for key in ("command", "model"):
+                        for key in ("command", "model", "specRelate", "value"):
                             val = action.get(key, "")
                             if isinstance(val, str) and source_model in val:
                                 action[key] = _replace_source_model(val, source_model, target_model)
+                        # pdId 替换为目标产品
+                        if "pdId" in action:
+                            action["pdId"] = int(config.get("pdId", 0))
             # 确保 model 字段是目标 model
             item["model"] = target_model
             log_fn and log_fn(f"  🔄 Model 替换: {source_model} → {target_model}")
@@ -773,7 +991,7 @@ def write_automation_export_excel(path: str, config: dict, auto_list: list):
     """
     导出自动化列表到 Excel
     Sheet1: 产品配置
-    Sheet2: 执行动作 (then)
+    Sheet2: 执行动作 (then)  — 聚合选值的 actionList 序列化为 JSON 字符串
     Sheet3: 触发条件 (if)
     """
     import pandas as pd
@@ -809,23 +1027,50 @@ def write_automation_export_excel(path: str, config: dict, auto_list: list):
                "ifV2Name", "whenV2Name", "diffAutomationName", "advancedConf",
                "valueType", "valueOperation"]
 
+    # actionList 子动作导出时需要保留的关键字段
+    ACTION_ITEM_KEYS = ["pdId", "intro", "plugId", "fwVer", "mcuFwVer", "platform",
+                        "attr", "specRelate", "model", "appValueStyle", "specType",
+                        "siId", "subIid", "autoType", "command", "value", "tgId",
+                        "trId", "saId", "gid", "extra", "rank", "ruleId", "specVer"]
+
     def _build_rows(items, keys):
         rows = []
+        # 合并所有 item 中出现的字段，确保 actionList 等可选列不丢失
+        all_keys_set = []
+        for k in keys:
+            if k not in all_keys_set:
+                all_keys_set.append(k)
         for item in items:
-            # 收集实际存在的字段
-            actual_keys = [k for k in keys if k in item]
-            # 再加上不在预定义列表中的其他字段
             for k in item:
-                if k not in actual_keys and k != "_trType":
-                    actual_keys.append(k)
+                if k not in all_keys_set and k != "_trType":
+                    all_keys_set.append(k)
+
+        for item in items:
             row = {}
-            for k in actual_keys:
+            for k in all_keys_set:
                 v = item.get(k, "")
-                if isinstance(v, (dict, list)):
+                # actionList 特殊处理：只保留关键字段，减少 Excel 体积
+                if k == "actionList" and isinstance(v, list):
+                    cleaned = []
+                    for act in v:
+                        if isinstance(act, dict):
+                            cleaned_act = {}
+                            for ak in ACTION_ITEM_KEYS:
+                                if ak in act:
+                                    cleaned_act[ak] = act[ak]
+                            # 保留不在预定义列表但有值的字段
+                            for ak, av in act.items():
+                                if ak not in cleaned_act and av not in (None, "", 0):
+                                    cleaned_act[ak] = av
+                            cleaned.append(cleaned_act)
+                        else:
+                            cleaned.append(act)
+                    v = json.dumps(cleaned, ensure_ascii=False)
+                elif isinstance(v, (dict, list)):
                     v = json.dumps(v, ensure_ascii=False)
                 row[k] = str(v) if v is not None else ""
             rows.append(row)
-        return rows, actual_keys
+        return rows, all_keys_set
 
     then_rows, then_cols = _build_rows(then_list, then_keys)
     if_rows, if_cols = _build_rows(if_list, if_keys)
