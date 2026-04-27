@@ -53,6 +53,7 @@ def build():
         '--hidden-import', 'miot_export_template',
         '--hidden-import', 'miot_create_properties',
         '--hidden-import', 'miot_service_core',
+        '--hidden-import', 'miot_automation_core',
         '--hidden-import', 'create_template',
         'miot_gui.py'
     ]

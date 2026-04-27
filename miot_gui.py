@@ -17,10 +17,10 @@ from PyQt6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QLineEdit, QPushButton, QTextEdit, QCheckBox,
     QFileDialog, QSpinBox, QGroupBox, QMessageBox, QProgressBar,
-    QComboBox, QStatusBar,
+    QComboBox, QStatusBar, QDialog, QMenu, QSizePolicy,
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize
+from PyQt6.QtGui import QFont, QIcon
 
 # ── 属性层核心
 from miot_export_template import (
@@ -51,8 +51,23 @@ from miot_service_core import (
     read_service_list_excel,
     parse_service_str,
 )
+# ── 自动化核心
+from miot_automation_core import (
+    get_automation_list,
+    check_standard_automation,
+    save_automation,
+    sync_automations,
+    read_automation_excel,
+    write_automation_export_excel,
+)
 
 import requests
+
+# ── 登录模块
+from miot_auth import (
+    get_current_user, get_all_users, save_user, switch_user,
+    remove_user, logout_current, MiLoginBrowser,
+)
 
 
 # ─── 样式 ─────────────────────────────────────────────────────
@@ -139,6 +154,34 @@ QProgressBar {
 QProgressBar::chunk { background-color: #3498db; border-radius: 3px; }
 QLabel#titleLabel   { font-size: 18px; font-weight: bold; color: #2c3e50; }
 QLabel#subtitleLabel { font-size: 12px; color: #7f8c8d; }
+/* 用户区域 */
+QPushButton#userBtn {
+    background-color: transparent;
+    color: #2c3e50;
+    border: 2px solid #dcdde1;
+    border-radius: 18px;
+    padding: 4px 14px 4px 10px;
+    font-size: 13px;
+    font-weight: bold;
+    min-height: 28px;
+}
+QPushButton#userBtn:hover { border-color: #3498db; color: #3498db; }
+QPushButton#userBtn[loggedIn="true"] {
+    border-color: #27ae60; color: #27ae60;
+}
+QPushButton#userBtn[loggedIn="true"]:hover {
+    border-color: #e74c3c; color: #e74c3c;
+}
+QPushButton#loginBtn {
+    background-color: #ff6700;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 16px;
+    font-size: 13px;
+    font-weight: bold;
+}
+QPushButton#loginBtn:hover { background-color: #e55d00; }
 QTabWidget#innerTabs::pane {
     border: 1px solid #e0e0e0;
     border-radius: 4px;
@@ -354,6 +397,75 @@ class SyncServiceWorker(QThread):
             self.finished_err.emit(f"同步失败:\n{traceback.format_exc()}")
 
 
+# ─── 自动化 Worker ────────────────────────────────────────────
+
+class ExportAutomationWorker(QThread):
+    """导出自动化列表"""
+    progress    = pyqtSignal(str)
+    finished_ok  = pyqtSignal(str)
+    finished_err = pyqtSignal(str)
+
+    def __init__(self, config, output_path):
+        super().__init__()
+        self.config = config; self.output_path = output_path
+
+    def run(self):
+        try:
+            self.progress.emit("📋 正在查询自动化列表...")
+            auto_list = get_automation_list(self.config)
+            then_count = sum(1 for a in auto_list if a.get("_trType") == "then")
+            if_count = sum(1 for a in auto_list if a.get("_trType") == "if")
+            then_action = sum(1 for a in auto_list if a.get("_trType") == "then" and a.get("actionList"))
+            then_simple = then_count - then_action
+            self.progress.emit(f"✅ 找到 {len(auto_list)} 个自动化（执行动作: {then_count}[组合{then_action}+普通{then_simple}], 触发条件: {if_count}）")
+
+            if not auto_list:
+                self.finished_err.emit("未查到自动化，请检查 Cookie 和产品信息")
+                return
+
+            self.progress.emit("📝 正在生成 Excel...")
+            write_automation_export_excel(self.output_path, self.config, auto_list)
+            self.finished_ok.emit(self.output_path)
+        except Exception:
+            self.finished_err.emit(f"导出失败:\n{traceback.format_exc()}")
+
+
+class CreateAutomationWorker(QThread):
+    """批量创建自定义自动化"""
+    progress    = pyqtSignal(str)
+    update_progress = pyqtSignal(int, int)  # current, total
+    finished_ok  = pyqtSignal(int, int)     # success, failed
+    finished_err = pyqtSignal(str)
+
+    def __init__(self, config, auto_items, dry_run=False, delay=0.5):
+        super().__init__()
+        self.config = config; self.auto_items = auto_items
+        self.dry_run = dry_run; self.delay = delay
+        self._cancel = False
+
+    def cancel(self):
+        self._cancel = True
+
+    def run(self):
+        try:
+            result = sync_automations(
+                self.config, self.auto_items,
+                dry_run=self.dry_run,
+                delay=self.delay,
+                log_fn=self.progress.emit,
+                cancelled_fn=lambda: self._cancel,
+            )
+            s = len(result["success"])
+            f = len(result["failed"])
+            # 保存结果
+            results_path = os.path.join(os.path.expanduser("~"), "Desktop", "automation_results.json")
+            with open(results_path, "w", encoding="utf-8") as fout:
+                json.dump(result, fout, ensure_ascii=False, indent=2, default=str)
+            self.finished_ok.emit(s, f)
+        except Exception:
+            self.finished_err.emit(f"创建失败:\n{traceback.format_exc()}")
+
+
 class ExportServiceWorker(QThread):
     """导出服务 / 属性详情"""
     progress    = pyqtSignal(str)
@@ -463,6 +575,7 @@ def _cookie_group(parent_layout, prefix: str, show_userid=True):
     """
     返回 (grp, token_edit, ph_edit, userid_edit_or_None)
     prefix 用于内部区分，不展示给用户
+    如果已登录，自动填充 Cookie 字段
     """
     grp = QGroupBox("Cookie 信息")
     form = QFormLayout()
@@ -477,6 +590,15 @@ def _cookie_group(parent_layout, prefix: str, show_userid=True):
         userid_edit = QLineEdit()
         userid_edit.setPlaceholderText("如 1097752639")
         form.addRow("userId:", userid_edit)
+
+    # 自动填充当前用户的 Cookie
+    cur = get_current_user()
+    if cur:
+        token.setText(cur.get("serviceToken", ""))
+        ph.setText(cur.get("xiaomiiot_ph", ""))
+        if userid_edit:
+            userid_edit.setText(cur.get("userId", ""))
+
     chk = QCheckBox("显示 Cookie")
     def toggle(checked):
         mode = QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
@@ -1236,6 +1358,334 @@ def _generate_blank_template(output_path: str):
     wb.save(output_path)
 
 
+# ─── 自动化 Tab ────────────────────────────────────────────────
+
+class ExportAutomationTab(QWidget):
+    """导出自定义自动化列表"""
+    def __init__(self):
+        super().__init__()
+        self._worker = None
+        self._build()
+
+    def _build(self):
+        layout = QHBoxLayout(self)
+
+        left = QWidget(); left.setFixedWidth(460)
+        lv = QVBoxLayout(left)
+
+        # 连接信息
+        grp_conn = QGroupBox("连接信息")
+        form_conn = QFormLayout()
+        self.token_edit = QLineEdit(); self.token_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.token_edit.setPlaceholderText("serviceToken")
+        self.ph_edit = QLineEdit(); self.ph_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.ph_edit.setPlaceholderText("xiaomiiot_ph")
+        self.userid_edit = QLineEdit(); self.userid_edit.setPlaceholderText("userId")
+        self.pid_edit = QLineEdit(); self.pid_edit.setPlaceholderText("pdId")
+        self.model_edit = QLineEdit(); self.model_edit.setPlaceholderText("如 gudi.switch.swy007")
+        chk = QCheckBox("显示 Cookie")
+        def toggle(c):
+            mode = QLineEdit.EchoMode.Normal if c else QLineEdit.EchoMode.Password
+            self.token_edit.setEchoMode(mode); self.ph_edit.setEchoMode(mode)
+        chk.toggled.connect(toggle)
+        form_conn.addRow("serviceToken:", self.token_edit)
+        form_conn.addRow("xiaomiiot_ph:", self.ph_edit)
+        form_conn.addRow("userId:", self.userid_edit)
+        form_conn.addRow("pdId:", self.pid_edit)
+        form_conn.addRow("产品型号 (model):", self.model_edit)
+        form_conn.addRow("", chk)
+        grp_conn.setLayout(form_conn)
+        lv.addWidget(grp_conn)
+
+        # 从 Excel 读取配置
+        grp_excel = QGroupBox("或从 Excel 读取配置")
+        ev = QHBoxLayout()
+        self.excel_edit = QLineEdit(); self.excel_edit.setPlaceholderText("选择自动化 Excel 文件")
+        btn_xl = QPushButton("浏览...")
+        btn_xl.clicked.connect(self._browse_excel)
+        ev.addWidget(self.excel_edit); ev.addWidget(btn_xl)
+        grp_excel.setLayout(ev)
+        lv.addWidget(grp_excel)
+
+        # 按钮
+        btn_row = QHBoxLayout()
+        self.btn_export = QPushButton("📤 导出自动化")
+        self.btn_export.setObjectName("successBtn")
+        self.btn_export.clicked.connect(self._start)
+        btn_row.addWidget(self.btn_export)
+        lv.addLayout(btn_row)
+        lv.addStretch()
+
+        # 右侧日志
+        right = QWidget(); rv = QVBoxLayout(right)
+        self.log = _make_log_panel(rv)
+        self.progress = _make_progress(rv)
+
+        layout.addWidget(left)
+        layout.addWidget(right, stretch=1)
+
+    def _browse_excel(self):
+        path, _ = QFileDialog.getOpenFileName(self, "选择自动化 Excel", "", "Excel (*.xlsx *.xls)")
+        if path:
+            self.excel_edit.setText(path)
+
+    def _build_config(self):
+        config = {
+            "serviceToken": self.token_edit.text().strip(),
+            "xiaomiiot_ph": self.ph_edit.text().strip(),
+            "userId":       self.userid_edit.text().strip(),
+            "pdId":         self.pid_edit.text().strip(),
+            "model":        self.model_edit.text().strip(),
+        }
+        excel_path = self.excel_edit.text().strip()
+        if excel_path and os.path.exists(excel_path):
+            try:
+                cfg_xl, _ = read_automation_excel(excel_path)
+                for k in ("serviceToken", "xiaomiiot_ph", "userId", "pdId", "model"):
+                    if not config[k]:
+                        config[k] = cfg_xl.get(k, "")
+            except Exception:
+                pass
+        missing = [k for k in ("userId", "xiaomiiot_ph", "pdId") if not config.get(k)]
+        if missing:
+            QMessageBox.warning(self, "提示", f"缺少必填项:\n{', '.join(missing)}")
+            return None
+        return config
+
+    def _start(self):
+        config = self._build_config()
+        if not config:
+            return
+
+        safe_model = config.get("model", "unknown").replace(".", "_").replace("-", "_")
+        default_name = f"{safe_model}_automation_export.xlsx"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "保存导出文件", default_name, "Excel (*.xlsx)")
+        if not path:
+            return
+
+        self.log.clear()
+        self.btn_export.setEnabled(False)
+        self.progress.setVisible(True); self.progress.setRange(0, 0)
+
+        self._worker = ExportAutomationWorker(config, path)
+        self._worker.progress.connect(self.log.append)
+        self._worker.finished_ok.connect(self._done_ok)
+        self._worker.finished_err.connect(self._done_err)
+        self._worker.start()
+
+    def _done_ok(self, path):
+        self.btn_export.setEnabled(True)
+        self.progress.setVisible(False)
+        self.log.append(f"\n🎉 导出成功: {path}")
+        QMessageBox.information(self, "导出成功", f"文件已保存:\n{path}")
+
+    def _done_err(self, msg):
+        self.btn_export.setEnabled(True)
+        self.progress.setVisible(False)
+        self.log.append(f"\n❌ {msg}")
+        QMessageBox.critical(self, "导出失败", msg)
+
+
+class CreateAutomationTab(QWidget):
+    """批量创建自定义自动化"""
+    def __init__(self):
+        super().__init__()
+        self._worker = None
+        self._build()
+
+    def _build(self):
+        layout = QHBoxLayout(self)
+
+        left = QWidget(); left.setFixedWidth(460)
+        lv = QVBoxLayout(left)
+
+        # 连接信息
+        grp_conn = QGroupBox("连接信息")
+        form_conn = QFormLayout()
+        self.token_edit = QLineEdit(); self.token_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.token_edit.setPlaceholderText("serviceToken")
+        self.ph_edit = QLineEdit(); self.ph_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.ph_edit.setPlaceholderText("xiaomiiot_ph")
+        self.userid_edit = QLineEdit(); self.userid_edit.setPlaceholderText("userId")
+        self.pid_edit = QLineEdit(); self.pid_edit.setPlaceholderText("pdId")
+        self.model_edit = QLineEdit(); self.model_edit.setPlaceholderText("如 gudi.switch.swy007")
+        chk = QCheckBox("显示 Cookie")
+        def toggle(c):
+            mode = QLineEdit.EchoMode.Normal if c else QLineEdit.EchoMode.Password
+            self.token_edit.setEchoMode(mode); self.ph_edit.setEchoMode(mode)
+        chk.toggled.connect(toggle)
+        form_conn.addRow("serviceToken:", self.token_edit)
+        form_conn.addRow("xiaomiiot_ph:", self.ph_edit)
+        form_conn.addRow("userId:", self.userid_edit)
+        form_conn.addRow("pdId:", self.pid_edit)
+        form_conn.addRow("产品型号 (model):", self.model_edit)
+        form_conn.addRow("", chk)
+        grp_conn.setLayout(form_conn)
+        lv.addWidget(grp_conn)
+
+        # 从 Excel 读取
+        grp_excel = QGroupBox("自动化 Excel（包含配置 + 自动化列表）")
+        ev = QHBoxLayout()
+        self.excel_edit = QLineEdit(); self.excel_edit.setPlaceholderText("选择自动化 Excel 文件")
+        btn_xl = QPushButton("浏览...")
+        btn_xl.clicked.connect(self._browse_file)
+        ev.addWidget(self.excel_edit); ev.addWidget(btn_xl)
+        grp_excel.setLayout(ev)
+        lv.addWidget(grp_excel)
+
+        # 选项
+        grp_opt = QGroupBox("选项")
+        ov = QFormLayout()
+        self.chk_dryrun = QCheckBox("Dry-run（仅预检，不实际创建）")
+        ov.addRow("", self.chk_dryrun)
+        self.delay_spin = QSpinBox(); self.delay_spin.setRange(0, 10)
+        self.delay_spin.setValue(1); self.delay_spin.setSuffix(" 秒")
+        ov.addRow("请求间隔:", self.delay_spin)
+        grp_opt.setLayout(ov)
+        lv.addWidget(grp_opt)
+
+        # 按钮
+        btn_row = QHBoxLayout()
+        self.btn_create = QPushButton("🚀 创建自动化")
+        self.btn_create.setObjectName("successBtn")
+        self.btn_create.clicked.connect(self._start)
+        btn_row.addWidget(self.btn_create)
+        self.btn_cancel = QPushButton("⏹ 取消")
+        self.btn_cancel.setObjectName("dangerBtn")
+        self.btn_cancel.clicked.connect(self._cancel)
+        self.btn_cancel.setEnabled(False)
+        btn_row.addWidget(self.btn_cancel)
+        lv.addLayout(btn_row)
+        lv.addStretch()
+
+        # 右侧日志
+        right = QWidget(); rv = QVBoxLayout(right)
+        self.log = _make_log_panel(rv)
+        self.progress = _make_progress(rv)
+
+        layout.addWidget(left)
+        layout.addWidget(right, stretch=1)
+
+    def _browse_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "选择自动化 Excel", "", "Excel (*.xlsx *.xls)")
+        if path:
+            self.excel_edit.setText(path)
+
+    def _start(self):
+        excel_path = self.excel_edit.text().strip()
+        if not excel_path or not os.path.exists(excel_path):
+            QMessageBox.warning(self, "提示", "请先选择自动化 Excel 文件")
+            return
+
+        try:
+            config, auto_items = read_automation_excel(excel_path)
+        except Exception as e:
+            QMessageBox.critical(self, "读取失败", f"Excel 读取错误:\n{e}")
+            return
+
+        # 手动输入覆盖 Excel 中的配置
+        manual = {
+            "serviceToken": self.token_edit.text().strip(),
+            "xiaomiiot_ph": self.ph_edit.text().strip(),
+            "userId":       self.userid_edit.text().strip(),
+            "pdId":         self.pid_edit.text().strip(),
+            "model":        self.model_edit.text().strip(),
+        }
+        for k, v in manual.items():
+            if v:
+                config[k] = v
+
+        missing = [k for k in ("userId", "xiaomiiot_ph", "pdId") if not config.get(k)]
+        if missing:
+            QMessageBox.warning(self, "提示", f"缺少必填项:\n{', '.join(missing)}")
+            return
+
+        if not auto_items:
+            QMessageBox.warning(self, "提示", "自动化列表为空")
+            return
+
+        dry = self.chk_dryrun.isChecked()
+        delay = self.delay_spin.value()
+
+        self.log.clear()
+        self.log.append(f"📋 共 {len(auto_items)} 个自动化待创建" + (" (dry-run)" if dry else ""))
+        self.btn_create.setEnabled(False)
+        self.btn_cancel.setEnabled(True)
+        self.progress.setVisible(True); self.progress.setRange(0, len(auto_items))
+
+        self._worker = CreateAutomationWorker(
+            config, auto_items, dry_run=dry, delay=delay)
+        self._worker.progress.connect(self.log.append)
+        self._worker.update_progress.connect(lambda c, t: self.progress.setValue(c))
+        self._worker.finished_ok.connect(self._done_ok)
+        self._worker.finished_err.connect(self._done_err)
+        self._worker.start()
+
+    def _cancel(self):
+        if self._worker and self._worker.isRunning():
+            self._worker.cancel()
+        self.log.append("⚠️ 取消请求已发送")
+
+    def _done_ok(self, success, failed):
+        self.btn_create.setEnabled(True)
+        self.btn_cancel.setEnabled(False)
+        self.progress.setVisible(False)
+        self.log.append(f"\n🎉 完成！成功: {success}, 失败: {failed}")
+        QMessageBox.information(self, "创建完成", f"成功: {success}\n失败: {failed}")
+
+    def _done_err(self, msg):
+        self.btn_create.setEnabled(True)
+        self.btn_cancel.setEnabled(False)
+        self.progress.setVisible(False)
+        self.log.append(f"\n❌ {msg}")
+        QMessageBox.critical(self, "创建失败", msg)
+
+
+# ─── 登录对话框 ──────────────────────────────────────────────
+
+class LoginDialog(QDialog):
+    """小米账号登录对话框 - 内嵌浏览器"""
+    login_success = pyqtSignal(dict)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("登录小米账号")
+        self.setMinimumSize(480, 640)
+        self.resize(520, 700)
+        self._browser = MiLoginBrowser(self)
+        self._init_ui()
+
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        # 浏览器
+        view = self._browser.create_view()
+        layout.addWidget(view)
+
+        # 连接信号
+        self._browser.login_success.connect(self._on_login_success)
+
+        # 启动登录
+        self._browser.start_login()
+
+    def _on_login_success(self, user_info: dict):
+        """登录成功"""
+        save_user(
+            user_id=user_info["userId"],
+            service_token=user_info["serviceToken"],
+            xiaomiiot_ph=user_info["xiaomiiot_ph"],
+            name=user_info.get("userId", ""),
+        )
+        self.login_success.emit(user_info)
+        self.accept()
+
+    def closeEvent(self, event):
+        self._browser.cleanup()
+        super().closeEvent(event)
+
+
 # ─── Main Window ──────────────────────────────────────────────
 
 class MIoTMainWindow(QMainWindow):
@@ -1244,7 +1694,10 @@ class MIoTMainWindow(QMainWindow):
         self.setWindowTitle("MIoT 平台工具")
         self.setMinimumSize(1020, 820)
         self.resize(1060, 860)
+        self._current_user = None
         self._init_ui()
+        self._update_user_ui()  # 初始化用户区域状态
+        self._check_saved_login()
 
     def _init_ui(self):
         central = QWidget()
@@ -1252,17 +1705,28 @@ class MIoTMainWindow(QMainWindow):
         layout = QVBoxLayout(central)
         layout.setContentsMargins(16, 12, 16, 12)
 
-        # 标题
+        # ── 标题行 + 用户区域
+        header = QHBoxLayout()
+
         title = QLabel("🔧 MIoT 平台工具")
         title.setObjectName("titleLabel")
-        subtitle = QLabel("小米 IoT 平台  —  服务层管理 & 属性层管理（整合版）")
+        subtitle = QLabel("小米 IoT 平台  —  服务层管理 & 属性层管理 & 自定义自动化（整合版）")
         subtitle.setObjectName("subtitleLabel")
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
+
+        header_left = QVBoxLayout()
+        header_left.addWidget(title)
+        header_left.addWidget(subtitle)
+        header_left.setSpacing(2)
+        header.addLayout(header_left, 1)
+
+        # 右上角用户区域
+        self._build_user_area(header)
+
+        layout.addLayout(header)
 
         # 外层 Tabs：服务层 / 属性层
-        outer_tabs = QTabWidget()
-        layout.addWidget(outer_tabs)
+        self.outer_tabs = QTabWidget()
+        layout.addWidget(self.outer_tabs)
 
         # ── 服务层
         svc_widget = QWidget()
@@ -1272,7 +1736,7 @@ class MIoTMainWindow(QMainWindow):
         svc_inner.addTab(CreateServiceTab(), "📋 创建服务")
         svc_inner.addTab(ExportServiceTab(), "📤 导出服务")
         svc_layout.addWidget(svc_inner)
-        outer_tabs.addTab(svc_widget, "🏗️ 服务层")
+        self.outer_tabs.addTab(svc_widget, "🏗️ 服务层")
 
         # ── 属性层
         prop_widget = QWidget()
@@ -1283,14 +1747,219 @@ class MIoTMainWindow(QMainWindow):
         prop_inner.addTab(CreatePropTab(),   "📥 创建属性")
         prop_inner.addTab(TemplatePropTab(), "📄 生成模板")
         prop_layout.addWidget(prop_inner)
-        outer_tabs.addTab(prop_widget, "⚙️ 属性层")
+        self.outer_tabs.addTab(prop_widget, "⚙️ 属性层")
+
+        # ── 自动化
+        auto_widget = QWidget()
+        auto_layout = QVBoxLayout(auto_widget)
+        auto_layout.setContentsMargins(0, 0, 0, 0)
+        auto_inner = QTabWidget()
+        auto_inner.addTab(ExportAutomationTab(), "📤 导出自动化")
+        auto_inner.addTab(CreateAutomationTab(), "📥 创建自动化")
+        auto_layout.addWidget(auto_inner)
+        self.outer_tabs.addTab(auto_widget, "🤖 自动化")
 
         self.statusBar().showMessage("就绪")
+
+    # ─── 用户区域 ─────────────────────────────────────────────
+
+    def _build_user_area(self, parent_layout):
+        """构建右上角用户区域（单按钮，未登录点击登录，已登录点击弹出菜单）"""
+        user_row = QHBoxLayout()
+        user_row.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        user_row.setSpacing(8)
+
+        self.user_btn = QPushButton("🔑 点击登录")
+        self.user_btn.setObjectName("userBtn")
+        self.user_btn.setProperty("loggedIn", "false")
+        self.user_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.user_btn.clicked.connect(self._on_user_btn_clicked)
+        user_row.addWidget(self.user_btn)
+
+        parent_layout.addLayout(user_row)
+
+    def _on_user_btn_clicked(self):
+        """点击用户按钮 - 弹出菜单"""
+        if not self._current_user:
+            self._open_login()
+            return
+
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu { font-size: 13px; padding: 4px; }
+            QMenu::item { padding: 6px 20px; }
+            QMenu::item:selected { background-color: #eaf2f8; }
+        """)
+
+        # 切换用户
+        all_users = get_all_users()
+        if len(all_users) > 1:
+            switch_menu = menu.addMenu("🔄 切换用户")
+            for u in all_users:
+                uid = u["userId"]
+                is_current = (uid == str(self._current_user.get("userId", "")))
+                label = f"{'✅ ' if is_current else ''}{u['name']} ({uid})"
+                act = switch_menu.addAction(label)
+                act.setData(uid)
+                if is_current:
+                    act.setEnabled(False)
+            switch_menu.triggered.connect(self._on_switch_user)
+            menu.addSeparator()
+
+        # 退出登录
+        menu.addAction("🚪 退出登录", self._on_logout)
+        # 删除用户
+        menu.addAction("🗑️ 删除此账号", self._on_delete_user)
+
+        # 在按钮下方弹出
+        pos = self.user_btn.mapToGlobal(self.user_btn.rect().bottomLeft())
+        menu.exec(pos)
+
+    def _on_switch_user(self, action):
+        """切换用户"""
+        uid = action.data()
+        if uid:
+            user = switch_user(uid)
+            if user:
+                self._current_user = user
+                self._update_user_ui()
+                self._fill_cookies()
+
+    def _on_logout(self):
+        """退出当前用户"""
+        logout_current()
+        self._current_user = None
+        self._update_user_ui()
+        self._clear_cookies()
+
+    def _on_delete_user(self):
+        """删除当前用户"""
+        if self._current_user:
+            uid = str(self._current_user.get("userId", ""))
+            ret = QMessageBox.question(
+                self, "确认删除",
+                f"确定要删除用户 {uid} 的登录信息吗？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if ret == QMessageBox.StandardButton.Yes:
+                remove_user(uid)
+                self._current_user = get_current_user()
+                self._update_user_ui()
+                if self._current_user:
+                    self._fill_cookies()
+                else:
+                    self._clear_cookies()
+
+    def _open_login(self):
+        """打开登录对话框"""
+        dlg = LoginDialog(self)
+        dlg.login_success.connect(self._on_login_success)
+        dlg.exec()
+
+    def _on_login_success(self, user_info: dict):
+        """登录成功回调"""
+        self._current_user = user_info
+        self._update_user_ui()
+        self._fill_cookies()
+
+    def _update_user_ui(self):
+        """更新用户区域 UI"""
+        if self._current_user:
+            uid = str(self._current_user.get("userId", ""))
+            name = self._current_user.get("name", uid)
+            self.user_btn.setText(f" 👤 {name}")
+            self.user_btn.setProperty("loggedIn", "true")
+            self.statusBar().showMessage(f"已登录: {name} ({uid})", 5000)
+        else:
+            self.user_btn.setText("🔑 点击登录")
+            self.user_btn.setProperty("loggedIn", "false")
+            self.statusBar().showMessage("未登录", 3000)
+        # 刷新 QSS（property 变化需要重新应用样式）
+        self.user_btn.style().unpolish(self.user_btn)
+        self.user_btn.style().polish(self.user_btn)
+
+    def _fill_cookies(self):
+        """自动填充所有 Tab 中的 Cookie 字段"""
+        if not self._current_user:
+            return
+        token = self._current_user.get("serviceToken", "")
+        ph = self._current_user.get("xiaomiiot_ph", "")
+        uid = str(self._current_user.get("userId", ""))
+
+        # 遍历所有 Tab 中的 Cookie 字段
+        for tab_widget in self._find_all_tabs():
+            self._fill_tab_cookies(tab_widget, token, ph, uid)
+
+    def _find_all_tabs(self) -> list:
+        """找到所有内层 Tab 页"""
+        tabs = []
+        for i in range(self.outer_tabs.count()):
+            outer_page = self.outer_tabs.widget(i)
+            inner_tabs = outer_page.findChild(QTabWidget)
+            if inner_tabs:
+                for j in range(inner_tabs.count()):
+                    tabs.append(inner_tabs.widget(j))
+        return tabs
+
+    def _fill_tab_cookies(self, widget, token, ph, uid):
+        """填充单个 Tab 中的 Cookie 字段"""
+        # 查找所有 QLineEdit，按 placeholder 或 objectName 识别
+        for edit in widget.findChildren(QLineEdit):
+            name = edit.placeholderText().lower()
+            obj = edit.objectName().lower() if edit.objectName() else ""
+            if "servicetoken" in name or "token" in obj:
+                if not edit.text().strip():
+                    edit.setText(token)
+            elif "xiaomiiot_ph" in name or "ph" in obj:
+                if not edit.text().strip():
+                    edit.setText(ph)
+            elif "userid" in name or "uid" in obj:
+                if not edit.text().strip():
+                    edit.setText(uid)
+        # 也通过变量名模式匹配（更可靠）
+        for attr_name in dir(widget):
+            if attr_name.startswith("_"):
+                continue
+            attr = getattr(widget, attr_name, None)
+            if not isinstance(attr, QLineEdit):
+                continue
+            al = attr_name.lower()
+            if "token" in al and not attr.text().strip():
+                attr.setText(token)
+            elif "ph" in al and "edit" in al and not attr.text().strip():
+                attr.setText(ph)
+            elif ("userid" in al or "uid" in al) and "edit" in al and not attr.text().strip():
+                attr.setText(uid)
+
+    def _clear_cookies(self):
+        """清空所有 Tab 中的 Cookie 字段"""
+        for tab_widget in self._find_all_tabs():
+            for edit in tab_widget.findChildren(QLineEdit):
+                al = edit.objectName().lower() if edit.objectName() else ""
+                attr_name = ""
+                # 通过变量名模式查找
+                for an in dir(tab_widget):
+                    if getattr(tab_widget, an, None) is edit:
+                        attr_name = an.lower()
+                        break
+                if any(k in attr_name for k in ("token", "ph_edit", "userid_edit", "uid_edit")):
+                    edit.clear()
+
+    def _check_saved_login(self):
+        """检查是否有已保存的登录信息"""
+        user = get_current_user()
+        if user:
+            self._current_user = user
+            self._update_user_ui()
+            self._fill_cookies()
 
 
 # ─── Entry ────────────────────────────────────────────────────
 
 def main():
+    # WebEngine 必须在 QApplication 创建前导入
+    from PyQt6.QtWebEngineWidgets import QWebEngineView  # noqa: F401
+
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     app.setStyleSheet(STYLESHEET)
