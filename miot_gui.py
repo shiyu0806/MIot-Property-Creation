@@ -531,10 +531,11 @@ class SyncServiceWorker(QThread):
     finished_ok  = pyqtSignal(dict)
     finished_err = pyqtSignal(str)
 
-    def __init__(self, config, service_rows, dry_run):
+    def __init__(self, config, service_rows, dry_run, delay=0.5):
         super().__init__()
         self.config = config; self.service_rows = service_rows
         self.dry_run = dry_run; self._cancel = False
+        self.delay = delay
 
     def cancel(self):
         self._cancel = True
@@ -817,6 +818,16 @@ class CreateServiceTab(QWidget):
         self.ph_edit.setPlaceholderText("留空使用 Excel 配置")
         self.userid_edit.setPlaceholderText("留空使用 Excel 配置")
 
+        # 选项
+        grp_opt = QGroupBox("选项")
+        form_opt = QFormLayout()
+        self.delay_spin = QSpinBox()
+        self.delay_spin.setRange(100, 2000); self.delay_spin.setValue(500)
+        self.delay_spin.setSingleStep(100); self.delay_spin.setSuffix(" ms")
+        form_opt.addRow("请求间隔:", self.delay_spin)
+        grp_opt.setLayout(form_opt)
+        lv.addWidget(grp_opt)
+
         # 按钮
         btn_row = QHBoxLayout()
         self.btn_dry = QPushButton("🧪 干跑检查")
@@ -916,7 +927,8 @@ class CreateServiceTab(QWidget):
         self._set_btns(running=True)
         self.progress.setVisible(True); self.progress.setRange(0, 0)
 
-        self._worker = SyncServiceWorker(config, rows, dry_run)
+        self._worker = SyncServiceWorker(config, rows, dry_run,
+                                          self.delay_spin.value() / 1000.0)
         self._worker.progress.connect(self.log.append)
         self._worker.finished_ok.connect(self._done_ok)
         self._worker.finished_err.connect(self._done_err)
@@ -1000,7 +1012,13 @@ class ExportServiceTab(QWidget):
         grp_opt = QGroupBox("导出选项")
         ov = QFormLayout()
         self.chk_props = QCheckBox("同时导出属性/事件/动作详情")
+        self.out_edit = QLineEdit(); self.out_edit.setPlaceholderText("点击浏览选择导出文件夹")
+        self.out_edit.setReadOnly(True)
+        btn_br = QPushButton("浏览...")
+        btn_br.clicked.connect(self._browse_out)
+        row = QHBoxLayout(); row.addWidget(self.out_edit); row.addWidget(btn_br)
         ov.addRow("", self.chk_props)
+        ov.addRow("导出文件夹:", row)
         grp_opt.setLayout(ov)
         lv.addWidget(grp_opt)
 
@@ -1025,6 +1043,11 @@ class ExportServiceTab(QWidget):
         path, _ = QFileDialog.getOpenFileName(self, "选择服务 Excel", "", "Excel (*.xlsx *.xls)")
         if path:
             self.excel_edit.setText(path)
+
+    def _browse_out(self):
+        path = QFileDialog.getExistingDirectory(self, "选择导出文件夹")
+        if path:
+            self.out_edit.setText(path)
 
     def _build_config(self):
         config = {
@@ -1059,19 +1082,18 @@ class ExportServiceTab(QWidget):
         if not config:
             return
 
+        out_dir = self.out_edit.text().strip()
+        if not out_dir:
+            out_dir = os.path.join(os.path.expanduser("~"), "Desktop")
         safe_model = config["model"].replace(".", "_").replace("-", "_")
-        default_name = f"{safe_model}_services_export.xlsx"
-        path, _ = QFileDialog.getSaveFileName(
-            self, "保存导出文件", default_name, "Excel (*.xlsx)")
-        if not path:
-            return
+        output_path = os.path.join(out_dir, f"{safe_model}_services_export.xlsx")
 
         self.log.clear()
         self.btn_export.setEnabled(False)
         self.progress.setVisible(True); self.progress.setRange(0, 0)
 
         self._worker = ExportServiceWorker(
-            config, path, export_props=self.chk_props.isChecked())
+            config, output_path, export_props=self.chk_props.isChecked())
         self._worker.progress.connect(self.log.append)
         self._worker.finished_ok.connect(self._done_ok)
         self._worker.finished_err.connect(self._done_err)
@@ -1123,17 +1145,14 @@ class ExportPropTab(QWidget):
         # 输出
         grp_out = QGroupBox("输出选项")
         form2 = QFormLayout()
-        self.out_edit = QLineEdit(); self.out_edit.setPlaceholderText("留空则自动生成")
+        self.out_edit = QLineEdit(); self.out_edit.setPlaceholderText("点击浏览选择导出文件夹")
+        self.out_edit.setReadOnly(True)
         btn_br = QPushButton("浏览...")
         btn_br.clicked.connect(self._browse_out)
         row = QHBoxLayout(); row.addWidget(self.out_edit); row.addWidget(btn_br)
-        form2.addRow("输出路径:", row)
+        form2.addRow("导出文件夹:", row)
         self.chk_json = QCheckBox("同时保存原始 JSON")
-        self.delay_spin = QSpinBox()
-        self.delay_spin.setRange(0, 5000); self.delay_spin.setValue(300)
-        self.delay_spin.setSuffix(" ms")
         form2.addRow("", self.chk_json)
-        form2.addRow("请求间隔:", self.delay_spin)
         grp_out.setLayout(form2)
         lv.addWidget(grp_out)
 
@@ -1155,7 +1174,7 @@ class ExportPropTab(QWidget):
         layout.addWidget(left); layout.addWidget(right, stretch=1)
 
     def _browse_out(self):
-        path, _ = QFileDialog.getSaveFileName(self, "选择输出路径", "", "Excel (*.xlsx)")
+        path = QFileDialog.getExistingDirectory(self, "选择导出文件夹")
         if path:
             self.out_edit.setText(path)
 
@@ -1169,6 +1188,13 @@ class ExportPropTab(QWidget):
             QMessageBox.warning(self, "提示", "请填写产品信息和 Cookie")
             return
 
+        # 自动生成输出路径
+        out_dir = self.out_edit.text().strip()
+        if not out_dir:
+            out_dir = os.path.join(os.path.expanduser("~"), "Desktop")
+        safe_model = model.replace(".", "_").replace("-", "_")
+        output_path = os.path.join(out_dir, f"MIoT_模板_{safe_model}.xlsx")
+
         self.log.clear()
         self.btn_start.setEnabled(False); self.btn_cancel.setEnabled(True)
         self.progress.setVisible(True); self.progress.setRange(0, 0)
@@ -1176,9 +1202,9 @@ class ExportPropTab(QWidget):
         self._worker = ExportPropWorker(
             pid, model, token, ph, userid,
             self.connect_type.value(),
-            self.out_edit.text().strip() or None,
+            output_path,
             self.chk_json.isChecked(),
-            self.delay_spin.value() / 1000.0,
+            0,  # 导出不需要间隔
         )
         self._worker.progress.connect(self.log.append)
         self._worker.finished_ok.connect(self._done_ok)
@@ -1245,8 +1271,8 @@ class CreatePropTab(QWidget):
         grp_opts = QGroupBox("选项")
         form_opts = QFormLayout()
         self.delay_spin = QSpinBox()
-        self.delay_spin.setRange(0, 10000); self.delay_spin.setValue(500)
-        self.delay_spin.setSuffix(" ms")
+        self.delay_spin.setRange(100, 2000); self.delay_spin.setValue(500)
+        self.delay_spin.setSingleStep(100); self.delay_spin.setSuffix(" ms")
         self.siid_spin = QSpinBox()
         self.siid_spin.setRange(0, 999); self.siid_spin.setValue(0)
         self.siid_spin.setSpecialValueText("全部")
@@ -1681,6 +1707,18 @@ class ExportAutomationTab(QWidget):
         self.ph_edit.setPlaceholderText("留空使用 Excel 配置或已登录账号")
         self.userid_edit.setPlaceholderText("留空使用 Excel 配置或已登录账号")
 
+        # 导出文件夹
+        grp_out = QGroupBox("导出选项")
+        ov = QFormLayout()
+        self.out_edit = QLineEdit(); self.out_edit.setPlaceholderText("点击浏览选择导出文件夹")
+        self.out_edit.setReadOnly(True)
+        btn_br = QPushButton("浏览...")
+        btn_br.clicked.connect(self._browse_out)
+        row = QHBoxLayout(); row.addWidget(self.out_edit); row.addWidget(btn_br)
+        ov.addRow("导出文件夹:", row)
+        grp_out.setLayout(ov)
+        lv.addWidget(grp_out)
+
         # 按钮
         btn_row = QHBoxLayout()
         self.btn_export = QPushButton("📤 导出自动化")
@@ -1702,6 +1740,11 @@ class ExportAutomationTab(QWidget):
         path, _ = QFileDialog.getOpenFileName(self, "选择自动化 Excel", "", "Excel (*.xlsx *.xls)")
         if path:
             self.excel_edit.setText(path)
+
+    def _browse_out(self):
+        path = QFileDialog.getExistingDirectory(self, "选择导出文件夹")
+        if path:
+            self.out_edit.setText(path)
 
     def _build_config(self):
         config = {
@@ -1735,18 +1778,17 @@ class ExportAutomationTab(QWidget):
         if not config:
             return
 
+        out_dir = self.out_edit.text().strip()
+        if not out_dir:
+            out_dir = os.path.join(os.path.expanduser("~"), "Desktop")
         safe_model = config.get("model", "unknown").replace(".", "_").replace("-", "_")
-        default_name = f"{safe_model}_automation_export.xlsx"
-        path, _ = QFileDialog.getSaveFileName(
-            self, "保存导出文件", default_name, "Excel (*.xlsx)")
-        if not path:
-            return
+        output_path = os.path.join(out_dir, f"{safe_model}_automation_export.xlsx")
 
         self.log.clear()
         self.btn_export.setEnabled(False)
         self.progress.setVisible(True); self.progress.setRange(0, 0)
 
-        self._worker = ExportAutomationWorker(config, path)
+        self._worker = ExportAutomationWorker(config, output_path)
         self._worker.progress.connect(self.log.append)
         self._worker.finished_ok.connect(self._done_ok)
         self._worker.finished_err.connect(self._done_err)
@@ -1809,8 +1851,9 @@ class CreateAutomationTab(QWidget):
         ov = QFormLayout()
         self.chk_dryrun = QCheckBox("Dry-run（仅预检，不实际创建）")
         ov.addRow("", self.chk_dryrun)
-        self.delay_spin = QSpinBox(); self.delay_spin.setRange(0, 10)
-        self.delay_spin.setValue(1); self.delay_spin.setSuffix(" 秒")
+        self.delay_spin = QSpinBox(); self.delay_spin.setRange(100, 2000)
+        self.delay_spin.setValue(500); self.delay_spin.setSingleStep(100)
+        self.delay_spin.setSuffix(" ms")
         ov.addRow("请求间隔:", self.delay_spin)
         grp_opt.setLayout(ov)
         lv.addWidget(grp_opt)
@@ -1893,7 +1936,7 @@ class CreateAutomationTab(QWidget):
             self.log.append(f"⚠️ 产品状态检查异常: {e}（继续执行）")
 
         dry = self.chk_dryrun.isChecked()
-        delay = self.delay_spin.value()
+        delay = self.delay_spin.value() / 1000.0
 
         self.log.append(f"📋 共 {len(auto_items)} 个自动化待创建" + (" (dry-run)" if dry else ""))
         self.btn_create.setEnabled(False)
