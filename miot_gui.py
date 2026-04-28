@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QLineEdit, QPushButton, QTextEdit, QCheckBox,
     QFileDialog, QSpinBox, QGroupBox, QMessageBox, QProgressBar,
-    QComboBox, QStatusBar, QDialog, QMenu, QSizePolicy,
+    QComboBox, QStatusBar, QDialog, QMenu, QSizePolicy, QListView,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize
 from PyQt6.QtGui import QFont, QIcon
@@ -50,6 +50,7 @@ from miot_service_core import (
     read_service_config_excel,
     read_service_list_excel,
     parse_service_str,
+    check_product_status,
 )
 # ── 自动化核心
 from miot_automation_core import (
@@ -67,6 +68,8 @@ import requests
 from miot_auth import (
     get_current_user, get_all_users, save_user, switch_user,
     remove_user, logout_current, MiLoginBrowser,
+    update_user_group, get_curr_enterprise, get_enterprise_list,
+    set_curr_enterprise,
 )
 
 
@@ -154,6 +157,40 @@ QProgressBar {
 QProgressBar::chunk { background-color: #3498db; border-radius: 3px; }
 QLabel#titleLabel   { font-size: 18px; font-weight: bold; color: #2c3e50; }
 QLabel#subtitleLabel { font-size: 12px; color: #7f8c8d; }
+/* 企业下拉 */
+QComboBox#entCombo {
+    background-color: transparent;
+    color: #2980b9;
+    border: 2px solid #dcdde1;
+    border-radius: 18px;
+    padding: 4px 30px 4px 10px;
+    font-size: 13px;
+    font-weight: bold;
+    min-height: 28px;
+    max-width: 280px;
+}
+QComboBox#entCombo:hover { border-color: #3498db; }
+QComboBox#entCombo::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: right center;
+    border: none;
+    width: 24px;
+}
+QComboBox#entCombo::down-arrow {
+    image: none;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 6px solid #2980b9;
+    margin-right: 8px;
+}
+QComboBox#entCombo QAbstractItemView {
+    font-size: 13px;
+    border: 1px solid #dcdde1;
+    border-radius: 6px;
+    selection-background-color: #eaf2f8;
+    selection-color: #2c3e50;
+    padding: 4px;
+}
 /* 用户区域 */
 QPushButton#userBtn {
     background-color: transparent;
@@ -571,6 +608,14 @@ def _make_progress(parent_layout) -> QProgressBar:
     parent_layout.addWidget(pb)
     return pb
 
+def _inject_group_id(config: dict):
+    """从当前登录用户自动注入 groupId 到 config（如果 config 中没有的话）"""
+    if config.get("groupId"):
+        return
+    cur = get_current_user()
+    if cur and cur.get("groupId"):
+        config["groupId"] = cur["groupId"]
+
 def _cookie_group(parent_layout, prefix: str, show_userid=True):
     """
     返回 (grp, token_edit, ph_edit, userid_edit_or_None)
@@ -709,6 +754,10 @@ class CreateServiceTab(QWidget):
         if not rows:
             QMessageBox.warning(self, "提示", "服务列表为空")
             return None, None
+
+        # 自动注入 groupId（从当前登录用户）
+        _inject_group_id(config)
+
         return config, rows
 
     def _start_dry(self):  self._run(dry_run=True)
@@ -718,14 +767,30 @@ class CreateServiceTab(QWidget):
         config, rows = self._build_config()
         if not config:
             return
+
+        # ─── 优先检查产品状态（仅正式创建时）─────────────────────
         if not dry_run:
+            self.log.clear()
+            self.log.append("🔍 正在检查产品状态...")
+            try:
+                is_ok, status, status_name, msg = check_product_status(config)
+                if is_ok:
+                    self.log.append(f"✅ {msg}")
+                else:
+                    self.log.append(f"❌ {msg}")
+                    QMessageBox.critical(self, "产品状态检查失败", msg)
+                    return
+            except Exception as e:
+                self.log.append(f"⚠️ 产品状态检查异常: {e}（继续执行）")
+
             reply = QMessageBox.question(
                 self, "确认创建", f"即将同步 {len(rows)} 个服务，是否继续？",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
             if reply != QMessageBox.StandardButton.Yes:
                 return
+        else:
+            self.log.clear()
 
-        self.log.clear()
         self.log.append(f"{'🧪 干跑模式' if dry_run else '🚀 正式创建'} - {len(rows)} 个服务\n")
         self._set_btns(running=True)
         self.progress.setVisible(True); self.progress.setRange(0, 0)
@@ -862,6 +927,10 @@ class ExportServiceTab(QWidget):
         if missing:
             QMessageBox.warning(self, "提示", f"缺少必填项:\n{', '.join(missing)}")
             return None
+
+        # 自动注入 groupId
+        _inject_group_id(config)
+
         return config
 
     def _start(self):
@@ -1120,6 +1189,10 @@ class CreatePropTab(QWidget):
         if not props:
             QMessageBox.warning(self, "提示", "属性定义为空")
             return None, None
+
+        # 自动注入 groupId
+        _inject_group_id(config)
+
         return config, props
 
     def _list_services(self):
@@ -1170,6 +1243,21 @@ class CreatePropTab(QWidget):
         config, props = self._load()
         if not config:
             return
+
+        # ─── 优先检查产品状态 ──────────────────────────────────
+        self.log.clear()
+        self.log.append("🔍 正在检查产品状态...")
+        try:
+            is_ok, status, status_name, msg = check_product_status(config)
+            if is_ok:
+                self.log.append(f"✅ {msg}")
+            else:
+                self.log.append(f"❌ {msg}")
+                QMessageBox.critical(self, "产品状态检查失败", msg)
+                return
+        except Exception as e:
+            self.log.append(f"⚠️ 产品状态检查异常: {e}（继续执行）")
+
         reply = QMessageBox.question(
             self, "确认创建", f"即将创建 {len(props)} 条属性，是否继续？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
@@ -1442,6 +1530,10 @@ class ExportAutomationTab(QWidget):
         if missing:
             QMessageBox.warning(self, "提示", f"缺少必填项:\n{', '.join(missing)}")
             return None
+
+        # 自动注入 groupId
+        _inject_group_id(config)
+
         return config
 
     def _start(self):
@@ -1585,14 +1677,30 @@ class CreateAutomationTab(QWidget):
             QMessageBox.warning(self, "提示", f"缺少必填项:\n{', '.join(missing)}")
             return
 
+        # 自动注入 groupId
+        _inject_group_id(config)
+
         if not auto_items:
             QMessageBox.warning(self, "提示", "自动化列表为空")
             return
 
+        # ─── 优先检查产品状态 ──────────────────────────────────
+        self.log.clear()
+        self.log.append("🔍 正在检查产品状态...")
+        try:
+            is_ok, status, status_name, msg = check_product_status(config)
+            if is_ok:
+                self.log.append(f"✅ {msg}")
+            else:
+                self.log.append(f"❌ {msg}")
+                QMessageBox.critical(self, "产品状态检查失败", msg)
+                return
+        except Exception as e:
+            self.log.append(f"⚠️ 产品状态检查异常: {e}（继续执行）")
+
         dry = self.chk_dryrun.isChecked()
         delay = self.delay_spin.value()
 
-        self.log.clear()
         self.log.append(f"📋 共 {len(auto_items)} 个自动化待创建" + (" (dry-run)" if dry else ""))
         self.btn_create.setEnabled(False)
         self.btn_cancel.setEnabled(True)
@@ -1661,6 +1769,7 @@ class LoginDialog(QDialog):
             service_token=user_info["serviceToken"],
             xiaomiiot_ph=user_info["xiaomiiot_ph"],
             name=user_info.get("userId", ""),
+            group_id=user_info.get("groupId", ""),
         )
         self.login_success.emit(user_info)
         self.accept()
@@ -1668,6 +1777,29 @@ class LoginDialog(QDialog):
     def closeEvent(self, event):
         self._browser.cleanup()
         super().closeEvent(event)
+
+
+# ─── 自定义企业下拉框（弹出列表自动展开宽度） ────────────────
+
+class EnterpriseComboBox(QComboBox):
+    """下拉弹出列表宽度根据内容自动展开，不受控件本身固定宽度限制"""
+
+    def showPopup(self):
+        super().showPopup()
+        view = self.view()
+        if view is None:
+            return
+        fm = self.fontMetrics()
+        max_text_width = 0
+        for i in range(self.count()):
+            text = self.itemText(i)
+            max_text_width = max(max_text_width, fm.horizontalAdvance(text))
+        needed_width = max_text_width + 60
+        combo_width = self.width()
+        popup_width = max(needed_width, combo_width)
+        popup = view.parentWidget()
+        if popup:
+            popup.setFixedWidth(popup_width)
 
 
 # ─── Main Window ──────────────────────────────────────────────
@@ -1679,6 +1811,7 @@ class MIoTMainWindow(QMainWindow):
         self.setMinimumSize(1020, 820)
         self.resize(1060, 860)
         self._current_user = None
+        self._ent_loading = False
         self._init_ui()
         self._update_user_ui()  # 初始化用户区域状态
         self._check_saved_login()
@@ -1748,11 +1881,24 @@ class MIoTMainWindow(QMainWindow):
     # ─── 用户区域 ─────────────────────────────────────────────
 
     def _build_user_area(self, parent_layout):
-        """构建右上角用户区域（单按钮，未登录点击登录，已登录点击弹出菜单）"""
+        """构建右上角用户区域：[企业下拉] [用户按钮]"""
         user_row = QHBoxLayout()
         user_row.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         user_row.setSpacing(8)
 
+        # 企业下拉（左侧）
+        self.ent_combo = EnterpriseComboBox()
+        self.ent_combo.setObjectName("entCombo")
+        self.ent_combo.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.ent_combo.setVisible(False)  # 登录后才显示
+        self.ent_combo.setToolTip("切换当前企业")
+        self.ent_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.ent_combo.setMinimumContentsLength(10)
+        self.ent_combo.setFixedWidth(280)
+        self.ent_combo.currentIndexChanged.connect(self._on_ent_combo_changed)
+        user_row.addWidget(self.ent_combo)
+
+        # 用户按钮（右侧）
         self.user_btn = QPushButton("🔑 点击登录")
         self.user_btn.setObjectName("userBtn")
         self.user_btn.setProperty("loggedIn", "false")
@@ -1798,6 +1944,44 @@ class MIoTMainWindow(QMainWindow):
         # 在按钮下方弹出
         pos = self.user_btn.mapToGlobal(self.user_btn.rect().bottomLeft())
         menu.exec(pos)
+
+    def _on_ent_combo_changed(self, index):
+        """企业下拉切换"""
+        if index < 0 or self._ent_loading:
+            return
+        ent = self.ent_combo.currentData()
+        if not ent or not isinstance(ent, dict):
+            return
+        gid = ent.get("groupId", "")
+        if not gid:
+            return
+
+        cur_gid = str(self._current_user.get("groupId", ""))
+        if gid == cur_gid:
+            return  # 没有变化
+
+        # 调用 API 切换企业
+        self.statusBar().showMessage(f"正在切换到 {ent.get('shortName', gid)}...", 3000)
+        ok = set_curr_enterprise(
+            self._current_user.get("userId", ""),
+            self._current_user.get("xiaomiiot_ph", ""),
+            self._current_user.get("serviceToken", ""),
+            gid,
+            ent.get("shortName", ""),
+            ent.get("compName", ""),
+        )
+        if ok:
+            update_user_group(self._current_user.get("userId", ""), gid)
+            self._current_user["groupId"] = gid
+            self._current_user["groupName"] = ent.get("compName", "")
+            self.statusBar().showMessage(
+                f"✅ 已切换到 {ent.get('shortName', gid)} ({ent.get('compName', '')})", 5000)
+        else:
+            QMessageBox.warning(self, "切换失败", "切换企业失败，请重试")
+            # 回滚选择
+            self._ent_loading = True
+            self._select_current_enterprise()
+            self._ent_loading = False
 
     def _on_switch_user(self, action):
         """切换用户"""
@@ -1847,20 +2031,78 @@ class MIoTMainWindow(QMainWindow):
         self._fill_cookies()
 
     def _update_user_ui(self):
-        """更新用户区域 UI"""
+        """更新用户区域和企业下拉 UI"""
         if self._current_user:
+            self.ent_combo.setVisible(True)
+            self.ent_combo.setEnabled(True)
             uid = str(self._current_user.get("userId", ""))
             name = self._current_user.get("name", uid)
-            self.user_btn.setText(f" 👤 {name}")
+            self.user_btn.setText(f"👤 {name}")
             self.user_btn.setProperty("loggedIn", "true")
-            self.statusBar().showMessage(f"已登录: {name} ({uid})", 5000)
+            status_msg = f"已登录: {name} ({uid})"
+            self._refresh_ent_combo()
+            gid = self._current_user.get("groupId", "")
+            if gid:
+                status_msg += f" | 企业: {gid}"
+            self.statusBar().showMessage(status_msg, 5000)
         else:
+            self.ent_combo.setVisible(False)
+            self.ent_combo.clear()
             self.user_btn.setText("🔑 点击登录")
             self.user_btn.setProperty("loggedIn", "false")
             self.statusBar().showMessage("未登录", 3000)
         # 刷新 QSS（property 变化需要重新应用样式）
         self.user_btn.style().unpolish(self.user_btn)
         self.user_btn.style().polish(self.user_btn)
+
+    def _refresh_ent_combo(self):
+        """刷新企业下拉列表并选中当前企业"""
+        if not self._current_user:
+            return
+        self._ent_loading = True
+        self.ent_combo.blockSignals(True)
+        self.ent_combo.clear()
+
+        try:
+            enterprises = get_enterprise_list(
+                self._current_user.get("userId", ""),
+                self._current_user.get("xiaomiiot_ph", ""),
+                self._current_user.get("serviceToken", ""),
+            )
+            cur_gid = str(self._current_user.get("groupId", ""))
+            current_index = -1
+            for i, ent in enumerate(enterprises):
+                gid = ent.get("groupId", "")
+                # 只显示中文企业名称
+                display_name = ent.get("compName", "") or ent.get("shortName", gid)
+                self.ent_combo.addItem(display_name, ent)
+                if gid == cur_gid:
+                    current_index = i
+
+            if current_index >= 0:
+                self.ent_combo.setCurrentIndex(current_index)
+            elif enterprises:
+                self.ent_combo.setCurrentIndex(0)
+            else:
+                self.ent_combo.addItem("（无企业）")
+                self.ent_combo.setEnabled(False)
+        except Exception:
+            self.ent_combo.addItem("（查询失败）")
+            self.ent_combo.setEnabled(False)
+
+        self.ent_combo.blockSignals(False)
+        self._ent_loading = False
+
+    def _select_current_enterprise(self):
+        """根据 _current_user 中的 groupId 选中对应项（不重新请求API）"""
+        cur_gid = str(self._current_user.get("groupId", ""))
+        self.ent_combo.blockSignals(True)
+        for i in range(self.ent_combo.count()):
+            ent = self.ent_combo.itemData(i)
+            if ent and isinstance(ent, dict) and str(ent.get("groupId", "")) == cur_gid:
+                self.ent_combo.setCurrentIndex(i)
+                break
+        self.ent_combo.blockSignals(False)
 
     def _fill_cookies(self):
         """自动填充所有 Tab 中的 Cookie 字段"""
@@ -1934,6 +2176,20 @@ class MIoTMainWindow(QMainWindow):
         user = get_current_user()
         if user:
             self._current_user = user
+            # 如果本地没有 groupId，尝试从 API 获取
+            if not user.get("groupId"):
+                try:
+                    ent = get_curr_enterprise(
+                        user.get("userId", ""),
+                        user.get("xiaomiiot_ph", ""),
+                        user.get("serviceToken", ""),
+                    )
+                    if ent.get("groupId"):
+                        user["groupId"] = ent["groupId"]
+                        user["groupName"] = ent.get("compName", "")
+                        update_user_group(user.get("userId", ""), ent["groupId"])
+                except Exception:
+                    pass
             self._update_user_ui()
             self._fill_cookies()
 

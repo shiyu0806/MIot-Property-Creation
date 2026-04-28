@@ -64,7 +64,7 @@ def get_all_users() -> list:
 
 
 def save_user(user_id: str, service_token: str, xiaomiiot_ph: str,
-              name: str = ""):
+              name: str = "", group_id: str = ""):
     """保存用户登录信息"""
     data = _load_users()
     data["users"][str(user_id)] = {
@@ -72,6 +72,7 @@ def save_user(user_id: str, service_token: str, xiaomiiot_ph: str,
         "serviceToken": service_token,
         "xiaomiiot_ph": xiaomiiot_ph,
         "name": name or str(user_id),
+        "groupId": group_id,
         "loginTime": time.time(),
     }
     data["current"] = str(user_id)
@@ -101,6 +102,125 @@ def remove_user(user_id: str):
         remaining = list(data.get("users", {}).keys())
         data["current"] = remaining[0] if remaining else None
     _save_users(data)
+
+
+def update_user_group(user_id: str, group_id: str):
+    """更新用户当前企业 groupId"""
+    data = _load_users()
+    uid = str(user_id)
+    if uid in data.get("users", {}):
+        data["users"][uid]["groupId"] = group_id
+        _save_users(data)
+
+
+# ─── 企业管理 API ──────────────────────────────────────────────
+
+import requests
+
+_IOT_BASE = "https://iot.mi.com"
+_OP_HEADERS = {
+    "accept": "application/json, text/plain, */*",
+    "referer": f"{_IOT_BASE}/fe-op/productCenter",
+    "user-agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/146.0.0.0 Safari/537.36"
+    ),
+}
+
+
+def get_curr_enterprise(user_id: str, xiaomiiot_ph: str,
+                        service_token: str = "") -> dict:
+    """
+    获取用户当前所属企业信息。
+    返回 {"groupId": ..., "shortName": ..., "compName": ...} 或空 dict
+    """
+    params = {"userId": str(user_id), "xiaomiiot_ph": xiaomiiot_ph}
+    cookies = {
+        "userId": str(user_id),
+        "xiaomiiot_ph": xiaomiiot_ph,
+        "serviceToken": service_token,
+    }
+    try:
+        resp = requests.get(
+            f"{_IOT_BASE}/cgi-op/api/v1/managercenter/group/getCurrEnterprise",
+            params=params, cookies=cookies, headers=_OP_HEADERS, timeout=10,
+        )
+        data = resp.json()
+        if data.get("status") == 200 and data.get("result"):
+            r = data["result"]
+            return {
+                "groupId": str(r.get("groupId", "")),
+                "shortName": r.get("shortName", ""),
+                "compName": r.get("compName", ""),
+            }
+    except Exception:
+        pass
+    return {}
+
+
+def get_enterprise_list(user_id: str, xiaomiiot_ph: str,
+                        service_token: str = "") -> list[dict]:
+    """
+    获取用户所属的所有企业列表。
+    返回 [{"groupId": ..., "shortName": ..., "compName": ...}, ...]
+    API: /cgi-op/api/v1/managercenter/group/userGroupList
+    """
+    params = {"userId": str(user_id), "xiaomiiot_ph": xiaomiiot_ph}
+    cookies = {
+        "userId": str(user_id),
+        "xiaomiiot_ph": xiaomiiot_ph,
+        "serviceToken": service_token,
+    }
+    try:
+        resp = requests.get(
+            f"{_IOT_BASE}/cgi-op/api/v1/managercenter/group/userGroupList",
+            params=params, cookies=cookies, headers=_OP_HEADERS, timeout=10,
+        )
+        data = resp.json()
+        if data.get("status") == 200 and data.get("result"):
+            groups = data["result"]
+            if isinstance(groups, list):
+                return [
+                    {
+                        "groupId": str(g.get("groupId", "")),
+                        "shortName": g.get("shortName", ""),
+                        "compName": g.get("compName", ""),
+                    }
+                    for g in groups
+                ]
+    except Exception:
+        pass
+    return []
+
+
+def set_curr_enterprise(user_id: str, xiaomiiot_ph: str,
+                        service_token: str, group_id: str,
+                        short_name: str = "", comp_name: str = "") -> bool:
+    """
+    切换当前企业。成功返回 True。
+    """
+    cookies = {
+        "userId": str(user_id),
+        "xiaomiiot_ph": xiaomiiot_ph,
+        "serviceToken": service_token,
+    }
+    payload = {
+        "groupId": int(group_id),
+        "shortName": short_name,
+        "compName": comp_name,
+    }
+    try:
+        resp = requests.post(
+            f"{_IOT_BASE}/cgi-op/post/api/v1/personCenter/setCurrEnterprise",
+            params={"userId": str(user_id), "xiaomiiot_ph": xiaomiiot_ph},
+            cookies=cookies, headers={**_OP_HEADERS, "content-type": "application/json"},
+            json=payload, timeout=10,
+        )
+        data = resp.json()
+        return data.get("status") == 200
+    except Exception:
+        return False
 
 
 def logout_current():
@@ -212,6 +332,17 @@ class MiLoginBrowser(QObject):
             "serviceToken": self._cookies.get("serviceToken", ""),
             "xiaomiiot_ph": self._cookies.get("xiaomiiot_ph", ""),
         }
+        # 登录成功后自动获取当前企业 groupId
+        try:
+            ent = get_curr_enterprise(
+                user_info["userId"], user_info["xiaomiiot_ph"],
+                user_info["serviceToken"],
+            )
+            if ent.get("groupId"):
+                user_info["groupId"] = ent["groupId"]
+                user_info["groupName"] = ent.get("compName", "")
+        except Exception:
+            pass
         self.login_success.emit(user_info)
 
     def cleanup(self):

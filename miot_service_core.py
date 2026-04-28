@@ -28,6 +28,77 @@ SERVICE_HEADERS = {
 GET_SERVICES_API  = f"{BASE}/cgi-std/api/v1/functionDefine/getInstanceServices"
 ADD_SERVICE_API   = f"{BASE}/cgi-std/post/api/v1/functionDefine/addInstanceService"
 MODIFY_SIID_API   = f"{BASE}/cgi-op/api/v1/speccenter/specV2/instanceProperty/modifyPropertyIid"
+PRODUCT_LIST_API  = f"{BASE}/cgi-op/api/v1/product/list/get"
+
+
+# ─── 产品状态检查 ─────────────────────────────────────────────
+
+# 产品状态映射
+PRODUCT_STATUS_MAP = {
+    0: "测试中",
+    1: "开发中",
+    2: "审核中",
+    3: "已发布",
+    4: "已下架",
+}
+
+def check_product_status(config: dict) -> tuple:
+    """
+    检查目标产品的状态，只有 status=0（测试中）才允许创建。
+    返回 (is_ok: bool, status: int, status_name: str, message: str)
+    调用方应在创建操作前优先调用此函数，非测试中状态直接拒绝创建。
+    """
+    pd_id = config.get("pdId", "")
+    if not pd_id:
+        return (False, -1, "未知", f"未指定产品ID (pdId)，无法检查产品状态")
+
+    params = {
+        "userId": str(config.get("userId", "")),
+        "xiaomiiot_ph": str(config.get("xiaomiiot_ph", "")),
+        "searchWords": str(config.get("model", "")),  # 用 model 作为搜索关键词
+        "region": -1,
+        "productTypeId": -1,
+        "connectType": -1,
+    }
+    # 如果有 groupId 则传入，提高查找效率
+    if config.get("groupId"):
+        params["groupId"] = str(config["groupId"])
+
+    # cgi-op 域名需要 /fe-op/productCenter 作为 referer
+    check_headers = dict(SERVICE_HEADERS)
+    check_headers["referer"] = f"{BASE}/fe-op/productCenter"
+
+    try:
+        resp = requests.get(
+            PRODUCT_LIST_API, params=params,
+            cookies=_cookies(config), headers=check_headers,
+            timeout=15,
+        )
+        data = resp.json()
+    except Exception as e:
+        return (False, -1, "查询失败", f"查询产品状态失败: {e}")
+
+    if data.get("status") != 200:
+        return (False, -1, "查询失败", f"查询产品状态失败: {data.get('message', data)}")
+
+    products = data.get("result") or []
+    target = None
+    for p in products:
+        if str(p.get("pdId")) == str(pd_id):
+            target = p
+            break
+
+    if not target:
+        return (False, -1, "未找到", f"未在产品列表中找到 pdId={pd_id} 的产品，请确认产品ID是否正确")
+
+    status = target.get("status", -1)
+    status_name = PRODUCT_STATUS_MAP.get(status, f"未知({status})")
+
+    if status == 0:
+        return (True, status, status_name, f"产品 {target.get('name', pd_id)} (pdId={pd_id}) 状态: {status_name}，允许创建")
+    else:
+        return (False, status, status_name,
+                f"产品 {target.get('name', pd_id)} (pdId={pd_id}) 状态: {status_name}（status={status}），仅测试中（status=0）才允许创建！")
 
 
 # ─── 低层 HTTP ────────────────────────────────────────────────
@@ -222,6 +293,20 @@ def sync_services(
 
     def is_cancelled():
         return cancelled_fn() if cancelled_fn else False
+
+    # ─── 优先检查产品状态（仅非 dry-run 时）────────────────────
+    if not dry_run:
+        log("🔍 正在检查产品状态...")
+        is_ok, status, status_name, msg = check_product_status(config)
+        if is_ok:
+            log(f"✅ {msg}")
+        else:
+            log(f"❌ {msg}")
+            return {
+                "created": 0, "skipped": 0,
+                "fixed": 0, "errors": len(service_rows),
+                "results": [{"action": "blocked", "error": msg} for _ in service_rows],
+            }
 
     # 获取已有服务
     log(f"正在获取 {config.get('model')} 的已有服务...")

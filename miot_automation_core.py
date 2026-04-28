@@ -19,6 +19,8 @@ import requests
 import json
 import time
 
+from miot_service_core import check_product_status
+
 # ─── API 端点 ─────────────────────────────────────────────────
 
 BASE = "https://iot.mi.com"
@@ -755,6 +757,19 @@ def sync_automations(config: dict, auto_items: list,
     返回 {"success": [...], "failed": [...], "skipped": [...]}
     """
     results = {"success": [], "failed": [], "skipped": []}
+
+    # ─── 优先检查产品状态（仅非 dry-run 时）────────────────────
+    if not dry_run:
+        log_fn and log_fn("🔍 正在检查产品状态...")
+        is_ok, status, status_name, msg = check_product_status(config)
+        if is_ok:
+            log_fn and log_fn(f"✅ {msg}")
+        else:
+            log_fn and log_fn(f"❌ {msg}")
+            for i, item in enumerate(auto_items):
+                intro = item.get("intro", f"自动化{i+1}")
+                results["failed"].append({"intro": intro, "type": item.get("_trType", "then"), "error": msg})
+            return results
 
     # 预处理：确保 command/key 中的 model 与目标 model 一致
     target_model = config.get("model", "")
