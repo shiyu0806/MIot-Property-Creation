@@ -26,7 +26,11 @@ from PyQt6.QtGui import QFont, QIcon
 from miot_export_template import (
     query_services as export_query_services,
     parse_prop_row,
+    parse_action_row,
+    parse_event_row,
     write_prop_sheet,
+    write_action_sheet,
+    write_event_sheet,
     write_config_sheet,
     write_source_sheet,
 )
@@ -34,13 +38,20 @@ from miot_create_properties import (
     query_services as create_query_services,
     match_service,
     build_request_body,
+    build_action_request_body,
+    build_event_request_body,
     create_property,
+    create_action,
+    create_event,
     detect_value_type,
     read_config,
     read_properties,
+    read_actions,
+    read_events,
+    batch_create,
     HEADERS,
     BASE,
-    CREATE_API,
+    CREATE_PROP_API as CREATE_API,
     QUERY_SERVICES_API,
 )
 # ── 服务层核心
@@ -292,6 +303,8 @@ class ExportPropWorker(QThread):
             self.progress.emit(f"✅ 找到 {len(services)} 个服务")
 
             all_props = []
+            all_actions = []
+            all_events = []
             for i, svc in enumerate(services):
                 siid = svc.get("siid", "?")
                 sname = svc.get("description", svc.get("name", ""))
@@ -301,6 +314,8 @@ class ExportPropWorker(QThread):
                            "siid": str(siid), "serviceType": stype,
                            "model": self.model,
                            "connectType": str(self.connect_type), "language": "zh_cn"}
+
+                # 属性
                 r2 = requests.get(
                     "https://iot.mi.com/cgi-std/api/v1/functionDefine/getInstanceProperties",
                     params=params2, headers=HEADERS, cookies=cookies, timeout=15)
@@ -312,10 +327,37 @@ class ExportPropWorker(QThread):
                 for p in props:
                     p["_service"] = svc
                 all_props.extend(props)
+
+                # 方法
+                r3 = requests.get(
+                    "https://iot.mi.com/cgi-std/api/v1/functionDefine/getInstanceActions",
+                    params=params2, headers=HEADERS, cookies=cookies, timeout=15)
+                try:
+                    adata = r3.json()
+                except Exception:
+                    adata = {}
+                actions = adata.get("result", []) if adata.get("status") == 200 else []
+                for a in actions:
+                    a["_service"] = svc
+                all_actions.extend(actions)
+
+                # 事件
+                r4 = requests.get(
+                    "https://iot.mi.com/cgi-std/api/v1/functionDefine/getInstanceEvents",
+                    params=params2, headers=HEADERS, cookies=cookies, timeout=15)
+                try:
+                    edata = r4.json()
+                except Exception:
+                    edata = {}
+                events = edata.get("result", []) if edata.get("status") == 200 else []
+                for e in events:
+                    e["_service"] = svc
+                all_events.extend(events)
+
                 if self.delay > 0:
                     time.sleep(self.delay)
 
-            self.progress.emit(f"✅ 共获取 {len(all_props)} 条属性")
+            self.progress.emit(f"✅ 共获取 {len(all_props)} 条属性, {len(all_actions)} 个方法, {len(all_events)} 个事件")
 
             if not self.output_path:
                 safe_model = self.model.replace(".", "_").replace("-", "_")
@@ -327,7 +369,19 @@ class ExportPropWorker(QThread):
             ws1 = wb.active; ws1.title = "属性定义"
             rows_data = [parse_prop_row(p, p.get("_service", {})) for p in all_props]
             write_prop_sheet(ws1, rows_data)
-            ws2 = wb.create_sheet("公共配置")
+
+            # 方法定义 Sheet
+            action_rows = [parse_action_row(a, a.get("_service", {})) for a in all_actions]
+            ws2 = wb.create_sheet("方法定义")
+            write_action_sheet(ws2, action_rows)
+
+            # 事件定义 Sheet
+            event_rows = [parse_event_row(e, e.get("_service", {})) for e in all_events]
+            ws3 = wb.create_sheet("事件定义")
+            write_event_sheet(ws3, event_rows)
+
+            # 公共配置 Sheet
+            ws4 = wb.create_sheet("公共配置")
 
             class _Args:
                 pass
@@ -335,16 +389,17 @@ class ExportPropWorker(QThread):
             args.pid = self.pid; args.model = self.model
             args.token = self.token; args.ph = self.ph
             args.userid = self.userid; args.connect_type = self.connect_type
-            write_config_sheet(ws2, args)
+            write_config_sheet(ws4, args)
 
-            ws3 = wb.create_sheet("原始数据参考")
-            write_source_sheet(ws3, services, rows_data)
+            ws5 = wb.create_sheet("原始数据参考")
+            write_source_sheet(ws5, services, rows_data, action_rows, event_rows)
             wb.save(self.output_path)
 
             if self.save_json:
                 json_path = self.output_path.replace(".xlsx", ".json")
                 with open(json_path, "w", encoding="utf-8") as f:
-                    json.dump({"services": services, "properties": all_props},
+                    json.dump({"services": services, "properties": all_props,
+                               "actions": all_actions, "events": all_events},
                               f, ensure_ascii=False, indent=2, default=str)
                 self.progress.emit(f"💾 JSON 已保存: {json_path}")
 
@@ -393,6 +448,59 @@ class CreatePropWorker(QThread):
                     self.progress.emit(f"  ❌ {name} 异常 ({e})")
                     failed += 1
                     results.append({"name": name, "status": "error", "error": str(e), "siid": siid})
+                if self.delay > 0:
+                    time.sleep(self.delay)
+
+            result_path = os.path.join(os.path.expanduser("~"), "Desktop", "miot_create_result.json")
+            with open(result_path, "w", encoding="utf-8") as f:
+                json.dump(results, f, ensure_ascii=False, indent=2)
+            self.finished_ok.emit(success, failed)
+        except Exception:
+            self.finished_err.emit(f"创建失败:\n{traceback.format_exc()}")
+
+
+class CreateAllWorker(QThread):
+    """批量创建属性+方法+事件"""
+    progress         = pyqtSignal(str)
+    update_progress  = pyqtSignal(int, int)
+    finished_ok      = pyqtSignal(int, int)
+    finished_err     = pyqtSignal(str)
+
+    def __init__(self, config, tasks, services, delay):
+        """
+        tasks: [(type_label, item, build_fn, create_fn, id_field, svc), ...]
+        """
+        super().__init__()
+        self.config = config; self.tasks = tasks
+        self.services = services; self.delay = delay
+
+    def run(self):
+        try:
+            success = failed = 0
+            results = []
+            for i, (type_label, item, build_fn, create_fn, id_field, svc) in enumerate(self.tasks):
+                name = item.get("name", f"行{i+1}")
+                siid = svc["siid"] if svc else item.get("siid", "?")
+                sname = svc.get("description", svc.get("name", "")) if svc else "未匹配"
+                body = build_fn(item, self.config, svc)
+                self.update_progress.emit(i + 1, len(self.tasks))
+                self.progress.emit(f"  [{i+1}][{type_label}] {name} → siid={siid} ({sname}) ...")
+                try:
+                    resp = create_fn(body, self.config)
+                    if resp.get("status") == 200:
+                        new_id = resp.get("result")
+                        self.progress.emit(f"  ✅ [{type_label}] {name} 成功 ({id_field}={new_id})")
+                        success += 1
+                        results.append({"type": type_label, "name": name, "status": "success", id_field: new_id, "siid": siid})
+                    else:
+                        msg = resp.get("message", resp.get("msg", json.dumps(resp, ensure_ascii=False)))
+                        self.progress.emit(f"  ❌ [{type_label}] {name} 失败 ({msg})")
+                        failed += 1
+                        results.append({"type": type_label, "name": name, "status": "failed", "error": msg, "siid": siid})
+                except Exception as e:
+                    self.progress.emit(f"  ❌ [{type_label}] {name} 异常 ({e})")
+                    failed += 1
+                    results.append({"type": type_label, "name": name, "status": "error", "error": str(e), "siid": siid})
                 if self.delay > 0:
                     time.sleep(self.delay)
 
@@ -1172,7 +1280,9 @@ class CreatePropTab(QWidget):
         from openpyxl import load_workbook
         wb = load_workbook(path)
         config = read_config(wb["公共配置"])
-        props  = read_properties(wb["属性定义"])
+        props   = read_properties(wb["属性定义"]) if "属性定义" in wb.sheetnames else []
+        actions = read_actions(wb["方法定义"]) if "方法定义" in wb.sheetnames else []
+        events  = read_events(wb["事件定义"]) if "事件定义" in wb.sheetnames else []
 
         for key, widget in [
             ("serviceToken", self.token_ov), ("xiaomiiot_ph", self.ph_ov),
@@ -1186,14 +1296,14 @@ class CreatePropTab(QWidget):
         if missing:
             QMessageBox.warning(self, "配置缺失", f"缺少必填项:\n{', '.join(missing)}")
             return None, None
-        if not props:
-            QMessageBox.warning(self, "提示", "属性定义为空")
+        if not props and not actions and not events:
+            QMessageBox.warning(self, "提示", "属性/方法/事件定义均为空")
             return None, None
 
         # 自动注入 groupId
         _inject_group_id(config)
 
-        return config, props
+        return config, (props, actions, events)
 
     def _list_services(self):
         config, _ = self._load()
@@ -1214,14 +1324,18 @@ class CreatePropTab(QWidget):
             self.log.append(f"❌ {e}")
 
     def _dryrun(self):
-        config, props = self._load()
+        config, items = self._load()
         if not config:
             return
+        props, actions, events = items
         self.log.clear(); self.log.append("🧪 干跑模式...\n")
         try:
             services = create_query_services(config)
             target_siid = self.siid_spin.value()
-            tasks = []
+
+            # 属性任务
+            self.log.append("📝 属性定义:")
+            prop_tasks = []
             for i, prop in enumerate(props):
                 svc = match_service(prop, services)
                 siid = svc["siid"] if svc else prop.get("siid", "?")
@@ -1229,20 +1343,64 @@ class CreatePropTab(QWidget):
                     continue
                 sname = svc.get("description", svc.get("name", "")) if svc else "❌ 未匹配"
                 vtype = detect_value_type(str(prop.get("format", "")), prop)
-                tasks.append((i+1, prop.get("name","?"), prop.get("format","?"), vtype, siid, sname))
+                prop_tasks.append((i+1, prop.get("name","?"), prop.get("format","?"), vtype, siid, sname))
 
-            self.log.append(f"{'#':>3} | {'name':<20} | {'format':<8} | {'vtype':<10} | siid | 服务")
-            self.log.append("-" * 80)
-            for t in tasks:
-                self.log.append(f"{t[0]:>3} | {t[1]:<20} | {t[2]:<8} | {t[3]:<10} | {str(t[4]):<4} | {t[5]}")
-            self.log.append(f"\n🏁 共 {len(tasks)} 条（干跑，未执行）")
+            if prop_tasks:
+                self.log.append(f"{'#':>3} | {'name':<20} | {'format':<8} | {'vtype':<10} | siid | 服务")
+                self.log.append("-" * 80)
+                for t in prop_tasks:
+                    self.log.append(f"{t[0]:>3} | {t[1]:<20} | {t[2]:<8} | {t[3]:<10} | {str(t[4]):<4} | {t[5]}")
+            else:
+                self.log.append("  （无属性）")
+
+            # 方法任务
+            self.log.append(f"\n📝 方法定义:")
+            action_tasks = []
+            for i, item in enumerate(actions):
+                svc = match_service(item, services)
+                siid = svc["siid"] if svc else item.get("siid", "?")
+                if target_siid > 0 and str(siid) != str(target_siid):
+                    continue
+                sname = svc.get("description", svc.get("name", "")) if svc else "❌ 未匹配"
+                action_tasks.append((i+1, item.get("name","?"), siid, sname))
+
+            if action_tasks:
+                self.log.append(f"{'#':>3} | {'name':<20} | siid | 服务")
+                self.log.append("-" * 60)
+                for t in action_tasks:
+                    self.log.append(f"{t[0]:>3} | {t[1]:<20} | {str(t[2]):<4} | {t[3]}")
+            else:
+                self.log.append("  （无方法）")
+
+            # 事件任务
+            self.log.append(f"\n📝 事件定义:")
+            event_tasks = []
+            for i, item in enumerate(events):
+                svc = match_service(item, services)
+                siid = svc["siid"] if svc else item.get("siid", "?")
+                if target_siid > 0 and str(siid) != str(target_siid):
+                    continue
+                sname = svc.get("description", svc.get("name", "")) if svc else "❌ 未匹配"
+                event_tasks.append((i+1, item.get("name","?"), siid, sname))
+
+            if event_tasks:
+                self.log.append(f"{'#':>3} | {'name':<20} | siid | 服务")
+                self.log.append("-" * 60)
+                for t in event_tasks:
+                    self.log.append(f"{t[0]:>3} | {t[1]:<20} | {str(t[2]):<4} | {t[3]}")
+            else:
+                self.log.append("  （无事件）")
+
+            total = len(prop_tasks) + len(action_tasks) + len(event_tasks)
+            self.log.append(f"\n🏁 共 {total} 条（属性{len(prop_tasks)}+方法{len(action_tasks)}+事件{len(event_tasks)}，干跑未执行）")
         except Exception:
             self.log.append(f"❌ {traceback.format_exc()}")
 
     def _start_create(self):
-        config, props = self._load()
+        config, items = self._load()
         if not config:
             return
+        props, actions, events = items
 
         # ─── 优先检查产品状态 ──────────────────────────────────
         self.log.clear()
@@ -1258,8 +1416,10 @@ class CreatePropTab(QWidget):
         except Exception as e:
             self.log.append(f"⚠️ 产品状态检查异常: {e}（继续执行）")
 
+        total = len(props) + len(actions) + len(events)
         reply = QMessageBox.question(
-            self, "确认创建", f"即将创建 {len(props)} 条属性，是否继续？",
+            self, "确认创建",
+            f"即将创建 {total} 条（属性{len(props)}+方法{len(actions)}+事件{len(events)}），是否继续？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if reply != QMessageBox.StandardButton.Yes:
             return
@@ -1269,16 +1429,37 @@ class CreatePropTab(QWidget):
             QMessageBox.critical(self, "错误", f"查询服务失败: {e}"); return
 
         target_siid = self.siid_spin.value()
-        if target_siid > 0:
-            props = [p for p in props
-                     if str((match_service(p, services) or {}).get("siid", p.get("siid", 0))) == str(target_siid)]
+
+        # 构建 task 列表：(type_label, item, build_fn, create_fn, id_field)
+        all_tasks = []
+        for p in props:
+            svc = match_service(p, services)
+            siid = svc["siid"] if svc else p.get("siid", "?")
+            if target_siid > 0 and str(siid) != str(target_siid):
+                continue
+            all_tasks.append(("属性", p, build_request_body, create_property, "piid", svc))
+        for a in actions:
+            svc = match_service(a, services)
+            siid = svc["siid"] if svc else a.get("siid", "?")
+            if target_siid > 0 and str(siid) != str(target_siid):
+                continue
+            all_tasks.append(("方法", a, build_action_request_body, create_action, "aiid", svc))
+        for e in events:
+            svc = match_service(e, services)
+            siid = svc["siid"] if svc else e.get("siid", "?")
+            if target_siid > 0 and str(siid) != str(target_siid):
+                continue
+            all_tasks.append(("事件", e, build_event_request_body, create_event, "eiid", svc))
+
+        if not all_tasks:
+            QMessageBox.information(self, "提示", "没有匹配的任务"); return
 
         self.log.clear()
-        self.log.append(f"🚀 开始创建 {len(props)} 条属性...\n")
+        self.log.append(f"🚀 开始创建 {len(all_tasks)} 条（属性+方法+事件）...\n")
         self._set_btns(running=True)
-        self.progress.setVisible(True); self.progress.setRange(0, len(props))
+        self.progress.setVisible(True); self.progress.setRange(0, len(all_tasks))
 
-        self._worker = CreatePropWorker(config, props, services, self.delay_spin.value() / 1000.0)
+        self._worker = CreateAllWorker(config, all_tasks, services, self.delay_spin.value() / 1000.0)
         self._worker.progress.connect(self.log.append)
         self._worker.update_progress.connect(lambda c, t: self.progress.setValue(c))
         self._worker.finished_ok.connect(self._done_ok)

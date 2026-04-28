@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-MIoT 属性模板导出工具
-- 根据已有产品自动查询所有服务及属性
+MIoT 模板导出工具
+- 根据已有产品自动查询所有服务、属性、方法和事件
 - 将数据自动填入 Excel 模板，直接可用于其他产品复用
 - 用法: python3 miot_export_template.py --pid 33257 --model uwize.switch.yzw07 \
          --token <serviceToken> --ph <xiaomiiot_ph> --userid <userId>
@@ -21,6 +21,8 @@ from openpyxl.worksheet.datavalidation import DataValidation
 # ─── API ──────────────────────────────────────────────────────
 BASE = "https://iot.mi.com"
 QUERY_PROPS_API    = f"{BASE}/cgi-std/api/v1/functionDefine/getInstanceProperties"
+QUERY_ACTIONS_API  = f"{BASE}/cgi-std/api/v1/functionDefine/getInstanceActions"
+QUERY_EVENTS_API   = f"{BASE}/cgi-std/api/v1/functionDefine/getInstanceEvents"
 QUERY_SERVICES_API = f"{BASE}/cgi-std/api/v1/functionDefine/getInstanceServices"
 
 HEADERS = {
@@ -85,6 +87,46 @@ def query_properties(siid: int, service_type: str, args) -> list[dict]:
         "language":    "zh_cn",
     })
     resp = requests.get(QUERY_PROPS_API, params=params,
+                        headers=HEADERS, cookies=build_cookies(args), timeout=15)
+    data = resp.json()
+    if data.get("status") != 200:
+        return []
+    return data.get("result", [])
+
+
+def query_actions(siid: int, service_type: str, args) -> list[dict]:
+    """查询指定服务下的方法列表"""
+    params = build_common_params(args)
+    params.update({
+        "version":     "1",
+        "status":      "0",
+        "siid":        str(siid),
+        "serviceType": service_type,
+        "model":       args.model,
+        "connectType": str(args.connect_type),
+        "language":    "zh_cn",
+    })
+    resp = requests.get(QUERY_ACTIONS_API, params=params,
+                        headers=HEADERS, cookies=build_cookies(args), timeout=15)
+    data = resp.json()
+    if data.get("status") != 200:
+        return []
+    return data.get("result", [])
+
+
+def query_events(siid: int, service_type: str, args) -> list[dict]:
+    """查询指定服务下的事件列表"""
+    params = build_common_params(args)
+    params.update({
+        "version":     "1",
+        "status":      "0",
+        "siid":        str(siid),
+        "serviceType": service_type,
+        "model":       args.model,
+        "connectType": str(args.connect_type),
+        "language":    "zh_cn",
+    })
+    resp = requests.get(QUERY_EVENTS_API, params=params,
                         headers=HEADERS, cookies=build_cookies(args), timeout=15)
     data = resp.json()
     if data.get("status") != 200:
@@ -170,6 +212,38 @@ def parse_prop_row(prop: dict, service: dict) -> dict:
     }
 
 
+def parse_action_row(action: dict, service: dict) -> dict:
+    """将一条方法 API 数据解析为 Excel 行数据"""
+    return {
+        "name":             action.get("name", ""),
+        "description":      action.get("description", ""),
+        "normalizationDesc": action.get("normalizationDesc", action.get("name", "")),
+        "service_desc":     service.get("description", ""),
+        "service_name":     service.get("name", ""),
+        "siid":             service.get("siid", ""),
+        # 原始元数据
+        "_aiid":            action.get("aiid", ""),
+        "_siid":            service.get("siid", ""),
+        "_service_type":    service.get("type", ""),
+    }
+
+
+def parse_event_row(event: dict, service: dict) -> dict:
+    """将一条事件 API 数据解析为 Excel 行数据"""
+    return {
+        "name":             event.get("name", ""),
+        "description":      event.get("description", ""),
+        "normalizationDesc": event.get("normalizationDesc", event.get("name", "")),
+        "service_desc":     service.get("description", ""),
+        "service_name":     service.get("name", ""),
+        "siid":             service.get("siid", ""),
+        # 原始元数据
+        "_eiid":            event.get("eiid", ""),
+        "_siid":            service.get("siid", ""),
+        "_service_type":    service.get("type", ""),
+    }
+
+
 # ─── Excel 写入 ───────────────────────────────────────────────
 
 # 样式
@@ -201,6 +275,28 @@ COLUMNS = [
     ("service_name",      "service_name",      20, "服务英文名\n如: switch, jog-delay-time",         False),
     ("siid",              "siid",               8, "服务ID（备选）\n直接指定siid，填了则忽略service匹配", False),
     ("access",            "access",            20, "访问权限\n默认: read,write,notify\n（gattAccess自动等同于access）",              False),
+]
+
+# 方法定义列
+ACTION_COLUMNS = [
+    # (key,                 header_name,       width, description,                               required)
+    ("name",              "name",              20, "方法英文名\n如: toggle, play, reset",           True),
+    ("description",       "description",       25, "方法中文描述\n如: 切换, 播放, 重置",             True),
+    ("normalizationDesc", "normalizationDesc", 20, "规范描述（通常=英文名）",                        False),
+    ("service_desc",      "service_desc",      22, "服务中文描述（推荐）\n如: 开关一键、按键1点动毫秒数", True),
+    ("service_name",      "service_name",      20, "服务英文名\n如: switch, jog-delay-time",         False),
+    ("siid",              "siid",               8, "服务ID（备选）\n直接指定siid，填了则忽略service匹配", False),
+]
+
+# 事件定义列
+EVENT_COLUMNS = [
+    # (key,                 header_name,       width, description,                               required)
+    ("name",              "name",              20, "事件英文名\n如: click, timeout, alarm",         True),
+    ("description",       "description",       25, "事件中文描述\n如: 点击, 超时, 告警",             True),
+    ("normalizationDesc", "normalizationDesc", 20, "规范描述（通常=英文名）",                        False),
+    ("service_desc",      "service_desc",      22, "服务中文描述（推荐）\n如: 开关一键、按键1点动毫秒数", True),
+    ("service_name",      "service_name",      20, "服务英文名\n如: switch, jog-delay-time",         False),
+    ("siid",              "siid",               8, "服务ID（备选）\n直接指定siid，填了则忽略service匹配", False),
 ]
 
 
@@ -252,6 +348,74 @@ def write_prop_sheet(ws, rows: list[dict]):
 
     # 行高
     ws.row_dimensions[2].height = 55
+
+
+def _write_generic_sheet(ws, rows: list[dict], columns: list[tuple],
+                         header_fill_color: str = "4472C4",
+                         opt_header_color: str = "8DB4E2",
+                         desc_fill_color: str = "D9E2F3",
+                         opt_desc_color: str = "E8F0FE"):
+    """通用 Sheet 写入（标题行 + 说明行 + 数据行），供方法/事件复用"""
+    h_fill = PatternFill("solid", fgColor=header_fill_color)
+    oh_fill = PatternFill("solid", fgColor=opt_header_color)
+    d_fill = PatternFill("solid", fgColor=desc_fill_color)
+    od_fill = PatternFill("solid", fgColor=opt_desc_color)
+
+    # 标题行
+    for col_idx, (key, header, width, desc, required) in enumerate(columns, 1):
+        fill = h_fill if required else oh_fill
+        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell.font = _header_font
+        cell.fill = fill
+        cell.alignment = _header_align
+        cell.border = _thin_border
+        ws.column_dimensions[get_column_letter(col_idx)].width = width
+
+    # 说明行
+    for col_idx, (key, header, width, desc, required) in enumerate(columns, 1):
+        df = d_fill if required else od_fill
+        cell = ws.cell(row=2, column=col_idx, value=desc)
+        cell.font = _desc_font
+        cell.fill = df
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = _thin_border
+
+    # 数据行
+    for row_idx, row_data in enumerate(rows, 3):
+        for col_idx, (key, *_) in enumerate(columns, 1):
+            val = row_data.get(key, "")
+            if isinstance(val, str) and val == "":
+                val = None
+            cell = ws.cell(row=row_idx, column=col_idx, value=val)
+            cell.font = _data_font
+            cell.alignment = _data_align
+            cell.border = _thin_border
+
+    # 冻结前两行
+    ws.freeze_panes = "A3"
+    last_col = get_column_letter(len(columns))
+    ws.auto_filter.ref = f"A1:{last_col}{2 + len(rows)}"
+
+    # 行高
+    ws.row_dimensions[2].height = 40
+
+
+def write_action_sheet(ws, rows: list[dict]):
+    """写入方法定义 Sheet"""
+    _write_generic_sheet(ws, rows, ACTION_COLUMNS,
+                         header_fill_color="C55A11",
+                         opt_header_color="F4B183",
+                         desc_fill_color="FCE4D6",
+                         opt_desc_color="FFF2CC")
+
+
+def write_event_sheet(ws, rows: list[dict]):
+    """写入事件定义 Sheet"""
+    _write_generic_sheet(ws, rows, EVENT_COLUMNS,
+                         header_fill_color="7030A0",
+                         opt_header_color="B4A7D6",
+                         desc_fill_color="E8D5F5",
+                         opt_desc_color="F3E8FD")
 
 
 def write_config_sheet(ws2, args):
@@ -308,8 +472,9 @@ def write_config_sheet(ws2, args):
     ws2.merge_cells(f"A{note_row}:C{note_row}")
 
 
-def write_source_sheet(ws3, services: list[dict], all_rows: list[dict]):
-    """写入原始数据参考 Sheet（服务列表 + 完整属性元数据）"""
+def write_source_sheet(ws3, services: list[dict], all_rows: list[dict],
+                       action_rows: list[dict] = None, event_rows: list[dict] = None):
+    """写入原始数据参考 Sheet（服务列表 + 完整属性/方法/事件元数据）"""
     # 服务列表
     ws3.cell(row=1, column=1, value="=== 来源产品服务列表 ===").font = Font(bold=True, color="4472C4", size=11)
     svc_headers = ["siid", "name", "description", "type"]
@@ -327,6 +492,8 @@ def write_source_sheet(ws3, services: list[dict], all_rows: list[dict]):
             cell.border = _thin_border
 
     offset = len(services) + 4
+
+    # 属性元数据
     ws3.cell(row=offset, column=1, value="=== 完整属性元数据（原始） ===").font = Font(bold=True, color="4472C4", size=11)
 
     prop_headers = ["siid", "piid", "service_name", "service_desc", "service_type",
@@ -359,6 +526,58 @@ def write_source_sheet(ws3, services: list[dict], all_rows: list[dict]):
             cell.font = _data_font
             cell.border = _thin_border
 
+    # 方法元数据
+    if action_rows:
+        offset = offset + 2 + len(all_rows) + 2
+        ws3.cell(row=offset, column=1, value="=== 完整方法元数据（原始） ===").font = Font(bold=True, color="C55A11", size=11)
+        action_headers = ["siid", "aiid", "service_name", "service_desc", "service_type", "name", "description"]
+        for col_idx, h in enumerate(action_headers, 1):
+            cell = ws3.cell(row=offset + 1, column=col_idx, value=h)
+            cell.font = _header_font
+            cell.fill = PatternFill("solid", fgColor="C55A11")
+            cell.alignment = _header_align
+            cell.border = _thin_border
+        for row_idx, r in enumerate(action_rows, offset + 2):
+            vals = [
+                r.get("_siid", ""),
+                r.get("_aiid", ""),
+                r.get("service_name", ""),
+                r.get("service_desc", ""),
+                r.get("_service_type", ""),
+                r.get("name", ""),
+                r.get("description", ""),
+            ]
+            for col_idx, v in enumerate(vals, 1):
+                cell = ws3.cell(row=row_idx, column=col_idx, value=v)
+                cell.font = _data_font
+                cell.border = _thin_border
+
+    # 事件元数据
+    if event_rows:
+        offset = offset + 2 + (len(action_rows) if action_rows else 0) + 2
+        ws3.cell(row=offset, column=1, value="=== 完整事件元数据（原始） ===").font = Font(bold=True, color="7030A0", size=11)
+        event_headers = ["siid", "eiid", "service_name", "service_desc", "service_type", "name", "description"]
+        for col_idx, h in enumerate(event_headers, 1):
+            cell = ws3.cell(row=offset + 1, column=col_idx, value=h)
+            cell.font = _header_font
+            cell.fill = PatternFill("solid", fgColor="7030A0")
+            cell.alignment = _header_align
+            cell.border = _thin_border
+        for row_idx, r in enumerate(event_rows, offset + 2):
+            vals = [
+                r.get("_siid", ""),
+                r.get("_eiid", ""),
+                r.get("service_name", ""),
+                r.get("service_desc", ""),
+                r.get("_service_type", ""),
+                r.get("name", ""),
+                r.get("description", ""),
+            ]
+            for col_idx, v in enumerate(vals, 1):
+                cell = ws3.cell(row=row_idx, column=col_idx, value=v)
+                cell.font = _data_font
+                cell.border = _thin_border
+
     ws3.column_dimensions["A"].width = 6
     ws3.column_dimensions["B"].width = 6
     ws3.column_dimensions["C"].width = 22
@@ -377,7 +596,7 @@ def write_source_sheet(ws3, services: list[dict], all_rows: list[dict]):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="从已有 MIoT 产品导出属性，生成可复用 Excel 模板",
+        description="从已有 MIoT 产品导出属性/方法/事件，生成可复用 Excel 模板",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
@@ -413,52 +632,84 @@ def main():
         print(f"{svc.get('siid','?'):>4} | {svc.get('name',''):<22} | "
               f"{svc.get('description',''):<22} | {svc.get('type','')}")
 
-    # 2. 逐个查询属性
-    print(f"\n🔍 查询各服务属性...")
+    # 2. 逐个查询属性、方法、事件
+    print(f"\n🔍 查询各服务属性、方法、事件...")
     all_rows = []
+    action_rows = []
+    event_rows = []
     for svc in services:
         siid = svc.get("siid")
         stype = svc.get("type", "")
         sname = svc.get("name", "?")
         sdesc = svc.get("description", "")
+
+        # 属性
         props = query_properties(siid, stype, args)
         print(f"  siid={siid:<3} {sname:<22} ({sdesc}) → {len(props)} 个属性")
         for p in props:
             row = parse_prop_row(p, svc)
             all_rows.append(row)
+
+        # 方法
+        actions = query_actions(siid, stype, args)
+        if actions:
+            print(f"  siid={siid:<3} {sname:<22} ({sdesc}) → {len(actions)} 个方法")
+        for a in actions:
+            row = parse_action_row(a, svc)
+            action_rows.append(row)
+
+        # 事件
+        events = query_events(siid, stype, args)
+        if events:
+            print(f"  siid={siid:<3} {sname:<22} ({sdesc}) → {len(events)} 个事件")
+        for e in events:
+            row = parse_event_row(e, svc)
+            event_rows.append(row)
+
         if args.delay:
             time.sleep(args.delay)
 
-    total = len(all_rows)
-    print(f"\n✅ 共抓取 {total} 条属性，覆盖 {len(services)} 个服务")
+    total_props = len(all_rows)
+    total_actions = len(action_rows)
+    total_events = len(event_rows)
+    print(f"\n✅ 共抓取 {total_props} 条属性, {total_actions} 个方法, {total_events} 个事件，覆盖 {len(services)} 个服务")
 
-    if total == 0:
-        print("⚠️  没有抓到任何属性，请检查 Cookie 是否有效或产品是否有属性定义")
+    if total_props == 0 and total_actions == 0 and total_events == 0:
+        print("⚠️  没有抓到任何数据，请检查 Cookie 是否有效或产品是否有定义")
         sys.exit(1)
 
     # 3. 可选输出 JSON
     if args.json:
         json_path = args.output.replace(".xlsx", ".json")
         with open(json_path, "w", encoding="utf-8") as f:
-            json.dump(all_rows, f, ensure_ascii=False, indent=2)
+            json.dump({"properties": all_rows, "actions": action_rows, "events": event_rows},
+                      f, ensure_ascii=False, indent=2)
         print(f"💾 原始数据已保存: {json_path}")
 
     # 4. 写入 Excel
     print(f"\n📊 生成 Excel 模板: {args.output}")
     wb = Workbook()
 
-    # Sheet 1: 属性定义（可直接用于创建，pdId/model 需修改）
+    # Sheet 1: 属性定义
     ws1 = wb.active
     ws1.title = "属性定义"
     write_prop_sheet(ws1, all_rows)
 
-    # Sheet 2: 公共配置
-    ws2 = wb.create_sheet("公共配置")
-    write_config_sheet(ws2, args)
+    # Sheet 2: 方法定义
+    ws2 = wb.create_sheet("方法定义")
+    write_action_sheet(ws2, action_rows)
 
-    # Sheet 3: 来源数据参考
-    ws3 = wb.create_sheet("原始数据参考")
-    write_source_sheet(ws3, services, all_rows)
+    # Sheet 3: 事件定义
+    ws3 = wb.create_sheet("事件定义")
+    write_event_sheet(ws3, event_rows)
+
+    # Sheet 4: 公共配置
+    ws4 = wb.create_sheet("公共配置")
+    write_config_sheet(ws4, args)
+
+    # Sheet 5: 来源数据参考
+    ws5 = wb.create_sheet("原始数据参考")
+    write_source_sheet(ws5, services, all_rows, action_rows, event_rows)
 
     wb.save(args.output)
     print(f"✅ 模板已保存: {args.output}")
