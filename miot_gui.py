@@ -2044,8 +2044,8 @@ class MIoTMainWindow(QMainWindow):
         svc_layout = QVBoxLayout(svc_widget)
         svc_layout.setContentsMargins(0, 0, 0, 0)
         svc_inner = QTabWidget()
-        svc_inner.addTab(CreateServiceTab(), "📋 创建服务")
         svc_inner.addTab(ExportServiceTab(), "📤 导出服务")
+        svc_inner.addTab(CreateServiceTab(), "📋 创建服务")
         svc_layout.addWidget(svc_inner)
         self.outer_tabs.addTab(svc_widget, "🏗️ 服务层")
 
