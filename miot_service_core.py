@@ -9,6 +9,7 @@ MIoT 服务层核心逻辑
 
 import json
 import os
+import time
 
 import requests
 
@@ -69,11 +70,8 @@ def check_product_status(config: dict) -> tuple:
     check_headers["referer"] = f"{BASE}/fe-op/productCenter"
 
     try:
-        resp = requests.get(
-            PRODUCT_LIST_API, params=params,
-            cookies=_cookies(config), headers=check_headers,
-            timeout=15,
-        )
+        resp = _safe_request("GET", PRODUCT_LIST_API, params=params,
+                             cookies=_cookies(config), headers=check_headers)
         data = resp.json()
     except Exception as e:
         return (False, -1, "查询失败", f"查询产品状态失败: {e}")
@@ -124,6 +122,25 @@ def _headers(pd_id=None) -> dict:
     return h
 
 
+def _safe_request(method: str, url: str, *, max_retries: int = 3,
+                  retry_delay: float = 1.0, log_fn=None, **kwargs) -> requests.Response:
+    """带重试的 HTTP 请求，网络错误自动重试"""
+    last_exc = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.request(method, url, timeout=30, **kwargs)
+            return resp
+        except (ConnectionResetError, ConnectionError, OSError) as e:
+            last_exc = e
+            if attempt < max_retries:
+                if log_fn:
+                    log_fn(f"  ⚠️ 请求失败(第{attempt}次)，{retry_delay}s后重试: {e}")
+                else:
+                    print(f"  ⚠️ 请求失败(第{attempt}次)，{retry_delay}s后重试: {e}")
+                time.sleep(retry_delay)
+    raise last_exc  # type: ignore
+
+
 # ─── 查询服务 ─────────────────────────────────────────────────
 
 def get_services(config: dict) -> list[dict]:
@@ -138,11 +155,8 @@ def get_services(config: dict) -> list[dict]:
     if config.get("pdId"):
         params["pdId"] = str(config["pdId"])
 
-    resp = requests.get(
-        GET_SERVICES_API, params=params,
-        cookies=_cookies(config), headers=_headers(),
-        timeout=30
-    )
+    resp = _safe_request("GET", GET_SERVICES_API, params=params,
+                         cookies=_cookies(config), headers=_headers())
     try:
         data = resp.json()
     except Exception:
@@ -169,14 +183,11 @@ def create_service(config: dict, name: str, description: str = "",
         "description": description or " ",
         "pdId": int(pd_id) if pd_id else 0,
     }
-    resp = requests.post(
-        ADD_SERVICE_API,
-        params=_params(config),
-        cookies=_cookies(config),
-        headers=_headers(pd_id),
-        json=payload,
-        timeout=30,
-    )
+    resp = _safe_request("POST", ADD_SERVICE_API,
+                         params=_params(config),
+                         cookies=_cookies(config),
+                         headers=_headers(pd_id),
+                         json=payload)
     try:
         result = resp.json()
     except Exception:
@@ -207,14 +218,11 @@ def modify_siid(config: dict, service_id, old_siid: int, new_siid: int) -> dict:
         "whichIid": "SIID",
         "newIid": new_siid,
     }
-    resp = requests.post(
-        MODIFY_SIID_API,
-        params=_params(config),
-        cookies=_cookies(config),
-        headers=_headers(pd_id),
-        json=payload,
-        timeout=30,
-    )
+    resp = _safe_request("POST", MODIFY_SIID_API,
+                         params=_params(config),
+                         cookies=_cookies(config),
+                         headers=_headers(pd_id),
+                         json=payload)
     try:
         return resp.json()
     except Exception:

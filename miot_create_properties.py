@@ -110,6 +110,22 @@ def build_query_params(config: dict, **extra) -> dict:
     return params
 
 
+def _safe_request(method: str, url: str, *, max_retries: int = 3,
+                  retry_delay: float = 1.0, **kwargs) -> requests.Response:
+    """带重试的 HTTP 请求，网络错误自动重试"""
+    last_exc = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.request(method, url, timeout=15, **kwargs)
+            return resp
+        except (ConnectionResetError, ConnectionError, OSError) as e:
+            last_exc = e
+            if attempt < max_retries:
+                print(f"  ⚠️ 请求失败(第{attempt}次)，{retry_delay}s后重试: {e}")
+                time.sleep(retry_delay)
+    raise last_exc  # type: ignore
+
+
 def query_services(config: dict) -> list[dict]:
     """查询产品的所有服务列表"""
     params = build_query_params(
@@ -120,8 +136,8 @@ def query_services(config: dict) -> list[dict]:
         version=config.get("version", "1"),
         status=config.get("status", "0"),
     )
-    resp = requests.get(QUERY_SERVICES_API, params=params,
-                        headers=HEADERS, cookies=build_cookies(config), timeout=15)
+    resp = _safe_request("GET", QUERY_SERVICES_API, params=params,
+                         headers=HEADERS, cookies=build_cookies(config))
     data = resp.json()
     if data.get("status") != 200:
         print(f"❌ 查询服务列表失败: {data}")
@@ -141,8 +157,8 @@ def query_properties(siid: int, service_type: str, config: dict) -> list[dict]:
         "connectType": config.get("connectType", "16"),
         "language": config.get("language", "zh_cn"),
     })
-    resp = requests.get(QUERY_PROPS_API, params=params,
-                        headers=HEADERS, cookies=build_cookies(config), timeout=15)
+    resp = _safe_request("GET", QUERY_PROPS_API, params=params,
+                         headers=HEADERS, cookies=build_cookies(config))
     data = resp.json()
     if data.get("status") != 200:
         return []
@@ -152,24 +168,24 @@ def query_properties(siid: int, service_type: str, config: dict) -> list[dict]:
 def create_property(body: dict, config: dict) -> dict:
     """调用创建属性接口"""
     params = build_query_params(config)
-    resp = requests.post(CREATE_PROP_API, params=params, json=body,
-                         headers=HEADERS, cookies=build_cookies(config), timeout=15)
+    resp = _safe_request("POST", CREATE_PROP_API, params=params, json=body,
+                         headers=HEADERS, cookies=build_cookies(config))
     return resp.json()
 
 
 def create_action(body: dict, config: dict) -> dict:
     """调用创建方法接口"""
     params = build_query_params(config)
-    resp = requests.post(CREATE_ACTION_API, params=params, json=body,
-                         headers=HEADERS, cookies=build_cookies(config), timeout=15)
+    resp = _safe_request("POST", CREATE_ACTION_API, params=params, json=body,
+                         headers=HEADERS, cookies=build_cookies(config))
     return resp.json()
 
 
 def create_event(body: dict, config: dict) -> dict:
     """调用创建事件接口"""
     params = build_query_params(config)
-    resp = requests.post(CREATE_EVENT_API, params=params, json=body,
-                         headers=HEADERS, cookies=build_cookies(config), timeout=15)
+    resp = _safe_request("POST", CREATE_EVENT_API, params=params, json=body,
+                         headers=HEADERS, cookies=build_cookies(config))
     return resp.json()
 
 

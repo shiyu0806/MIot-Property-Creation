@@ -57,6 +57,32 @@ def _params(config: dict) -> dict:
     }
 
 
+# ─── 带重试的通用请求 ──────────────────────────────────────
+
+MAX_RETRIES = 3
+RETRY_DELAY = 1  # 秒
+
+
+def _safe_request(method: str, url: str, *, max_retries: int = MAX_RETRIES,
+                  retry_delay: float = RETRY_DELAY, log_fn=None, **kwargs) -> requests.Response:
+    """带重试的 HTTP 请求，网络错误自动重试，业务错误直接返回"""
+    last_exc = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.request(method, url, timeout=30, **kwargs)
+            return resp
+        except (ConnectionResetError, ConnectionError, OSError) as e:
+            last_exc = e
+            if attempt < max_retries:
+                label = kwargs.get("params", {}).get("pdId", url)
+                if log_fn:
+                    log_fn(f"  ⚠️ 请求失败(第{attempt}次)，{retry_delay}s后重试: {e}")
+                else:
+                    print(f"  ⚠️ 请求失败(第{attempt}次)，{retry_delay}s后重试: {e}")
+                time.sleep(retry_delay)
+    raise last_exc  # type: ignore
+
+
 # ─── 从 specRelate 解析 specType ─────────────────────────────
 
 def _replace_source_model(value: str, source_model: str, target_model: str) -> str:
@@ -164,11 +190,8 @@ def _parse_spec_relate(spec_relate: str) -> tuple:
 def get_automation_list(config: dict) -> list:
     """查询产品的自定义自动化列表，返回带 _trType 标记的列表"""
     params = {**_params(config), "pdId": str(config["pdId"])}
-    resp = requests.get(
-        LIST_API, params=params,
-        cookies=_cookies(config), headers=_headers(),
-        timeout=30,
-    )
+    resp = _safe_request("GET", LIST_API, params=params,
+                         cookies=_cookies(config), headers=_headers())
     try:
         data = resp.json()
     except Exception:
@@ -435,16 +458,13 @@ def check_standard_automation(config: dict, auto_item: dict) -> dict:
         gs_dto = _build_if_group_scene_dto(config, auto_item)
         fields["groupSceneDto"] = json.dumps(gs_dto, ensure_ascii=False)
 
-    resp = requests.post(
-        CHECK_API,
-        params=_params(config),
-        cookies=_cookies(config),
-        headers={
-            **{k: v for k, v in _headers().items() if k != "Content-Type"},
-        },
-        files={k: (None, v) for k, v in fields.items()},
-        timeout=30,
-    )
+    resp = _safe_request("POST", CHECK_API,
+                         params=_params(config),
+                         cookies=_cookies(config),
+                         headers={
+                             **{k: v for k, v in _headers().items() if k != "Content-Type"},
+                         },
+                         files={k: (None, v) for k, v in fields.items()})
     try:
         return resp.json()
     except Exception:
@@ -635,11 +655,9 @@ def save_automation(config: dict, auto_item: dict, is_update: bool = False) -> d
     except Exception:
         pass
 
-    resp = requests.post(
-        api, params=params,
-        cookies=_cookies(config), headers=_headers(),
-        json=payload, timeout=30,
-    )
+    resp = _safe_request("POST", api, params=params,
+                         cookies=_cookies(config), headers=_headers(),
+                         json=payload)
     try:
         return resp.json()
     except Exception:
@@ -663,13 +681,10 @@ def get_property_definitions(config: dict, use_cache: bool = True) -> dict:
     if use_cache and cache_key in _prop_def_cache:
         return _prop_def_cache[cache_key]
 
-    resp = requests.get(
-        PROP_DEF_API,
-        params=_params(config),
-        cookies=_cookies(config),
-        headers=_headers(),
-        timeout=30,
-    )
+    resp = _safe_request("GET", PROP_DEF_API,
+                         params=_params(config),
+                         cookies=_cookies(config),
+                         headers=_headers())
     try:
         data = resp.json()
     except Exception:
