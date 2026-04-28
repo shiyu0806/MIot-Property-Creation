@@ -278,33 +278,61 @@ class ExportPropWorker(QThread):
             params_base = {"userId": str(self.userid),
                            "xiaomiiot_ph": self.ph, "pdId": str(self.pid)}
 
+            all_props = []
+            all_actions = []
+            all_events = []
+            max_retries = 3
+
+            def _safe_get(url, params, label, retries=max_retries):
+                """带重试的 GET 请求，返回 result 列表"""
+                for attempt in range(1, retries + 1):
+                    try:
+                        r = requests.get(url, params=params, headers=HEADERS, cookies=cookies, timeout=15)
+                        data = r.json()
+                        return data.get("result", []) if data.get("status") == 200 else []
+                    except Exception as e:
+                        if attempt < retries:
+                            self.progress.emit(f"  ⚠️ {label}查询失败(第{attempt}次)，1s后重试: {e}")
+                            time.sleep(1)
+                        else:
+                            self.progress.emit(f"  ❌ {label}查询失败(已重试{retries}次): {e}")
+                            raise
+
             self.progress.emit("📋 正在查询产品服务列表...")
             params = {**params_base, "model": self.model,
                       "connectType": str(self.connect_type),
                       "language": "zh_cn", "version": "1", "status": "0"}
-            resp = requests.get(QUERY_SERVICES_API, params=params,
-                                headers=HEADERS, cookies=cookies, timeout=15)
-            if resp.status_code != 200:
-                self.finished_err.emit(f"HTTP 请求失败 (status={resp.status_code})\n请检查网络连接")
-                return
-            try:
-                data = resp.json()
-            except Exception:
-                snippet = resp.text[:500] if resp.text else "(空响应)"
-                self.finished_err.emit(f"API 返回非 JSON 内容 (HTTP {resp.status_code}):\n{snippet}\n\n常见原因：Cookie 过期，请重新获取 serviceToken 和 xiaomiiot_ph")
-                return
-            if data.get("status") != 200:
-                self.finished_err.emit(f"查询服务失败: {data}")
-                return
-            services = data.get("result", [])
+            services = None
+            for attempt in range(1, max_retries + 1):
+                try:
+                    resp = requests.get(QUERY_SERVICES_API, params=params,
+                                        headers=HEADERS, cookies=cookies, timeout=15)
+                    if resp.status_code != 200:
+                        self.finished_err.emit(f"HTTP 请求失败 (status={resp.status_code})\n请检查网络连接")
+                        return
+                    try:
+                        data = resp.json()
+                    except Exception:
+                        snippet = resp.text[:500] if resp.text else "(空响应)"
+                        self.finished_err.emit(f"API 返回非 JSON 内容 (HTTP {resp.status_code}):\n{snippet}\n\n常见原因：Cookie 过期，请重新获取 serviceToken 和 xiaomiiot_ph")
+                        return
+                    if data.get("status") != 200:
+                        self.finished_err.emit(f"查询服务失败: {data}")
+                        return
+                    services = data.get("result", [])
+                    break
+                except Exception as e:
+                    if attempt < max_retries:
+                        self.progress.emit(f"  ⚠️ 服务列表查询失败(第{attempt}次)，1s后重试: {e}")
+                        time.sleep(1)
+                    else:
+                        self.finished_err.emit(f"❌ 服务列表查询失败(已重试{max_retries}次): {e}")
+                        return
             if not services:
                 self.finished_err.emit("未查到服务，请检查 Cookie 和产品信息")
                 return
             self.progress.emit(f"✅ 找到 {len(services)} 个服务")
 
-            all_props = []
-            all_actions = []
-            all_events = []
             for i, svc in enumerate(services):
                 siid = svc.get("siid", "?")
                 sname = svc.get("description", svc.get("name", ""))
@@ -316,40 +344,25 @@ class ExportPropWorker(QThread):
                            "connectType": str(self.connect_type), "language": "zh_cn"}
 
                 # 属性
-                r2 = requests.get(
+                props = _safe_get(
                     "https://iot.mi.com/cgi-std/api/v1/functionDefine/getInstanceProperties",
-                    params=params2, headers=HEADERS, cookies=cookies, timeout=15)
-                try:
-                    pdata = r2.json()
-                except Exception:
-                    pdata = {}
-                props = pdata.get("result", []) if pdata.get("status") == 200 else []
+                    params2, "属性")
                 for p in props:
                     p["_service"] = svc
                 all_props.extend(props)
 
                 # 方法
-                r3 = requests.get(
+                actions = _safe_get(
                     "https://iot.mi.com/cgi-std/api/v1/functionDefine/getInstanceActions",
-                    params=params2, headers=HEADERS, cookies=cookies, timeout=15)
-                try:
-                    adata = r3.json()
-                except Exception:
-                    adata = {}
-                actions = adata.get("result", []) if adata.get("status") == 200 else []
+                    params2, "方法")
                 for a in actions:
                     a["_service"] = svc
                 all_actions.extend(actions)
 
                 # 事件
-                r4 = requests.get(
+                events = _safe_get(
                     "https://iot.mi.com/cgi-std/api/v1/functionDefine/getInstanceEvents",
-                    params=params2, headers=HEADERS, cookies=cookies, timeout=15)
-                try:
-                    edata = r4.json()
-                except Exception:
-                    edata = {}
-                events = edata.get("result", []) if edata.get("status") == 200 else []
+                    params2, "事件")
                 for e in events:
                     e["_service"] = svc
                 all_events.extend(events)
