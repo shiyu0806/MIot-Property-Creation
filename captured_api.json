@@ -1,0 +1,27 @@
+[
+  {
+    "method": "GET",
+    "url": "https://iot.mi.com/cgi-op/api/login?followup=https://iot.mi.com/fe-op/productCenter",
+    "headers": {
+      "referer": "https://iot.mi.com/fe-op/productCenter",
+      "upgrade-insecure-requests": "1",
+      "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+      "sec-ch-ua": "\"Chromium\";v=\"145\", \"Not:A-Brand\";v=\"99\"",
+      "sec-ch-ua-mobile": "?0",
+      "sec-ch-ua-platform": "\"macOS\""
+    },
+    "status": 302
+  },
+  {
+    "method": "GET",
+    "url": "https://iot.mi.com/cgi-op/api/login?followup=https://iot.mi.com/fe-op/productCenter",
+    "headers": {
+      "referer": "https://iot.mi.com/fe-op/productCenter",
+      "upgrade-insecure-requests": "1",
+      "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+      "sec-ch-ua": "\"Chromium\";v=\"145\", \"Not:A-Brand\";v=\"99\"",
+      "sec-ch-ua-mobile": "?0",
+      "sec-ch-ua-platform": "\"macOS\""
+    }
+  }
+]

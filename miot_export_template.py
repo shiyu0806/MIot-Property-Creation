@@ -7,6 +7,12 @@ MIoT 模板导出工具
          --token <serviceToken> --ph <xiaomiiot_ph> --userid <userId>
 """
 
+__all__ = [
+    "query_services", "parse_prop_row", "parse_action_row", "parse_event_row",
+    "write_prop_sheet", "write_action_sheet", "write_event_sheet",
+    "write_config_sheet", "write_source_sheet",
+]
+
 import argparse
 import json
 import sys
@@ -18,22 +24,26 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
+from miot_common import (
+    BASE as _BASE,
+    DEFAULT_HEADERS as _DEFAULT_HEADERS,
+    build_cookies as _build_cookies,
+    build_params as _build_params,
+    safe_request as _safe_request,
+    safe_int as _safe_int,
+    PROPERTY_COLUMNS as COLUMNS,
+    ACTION_COLUMNS,
+    EVENT_COLUMNS,
+)
+
 # ─── API ──────────────────────────────────────────────────────
-BASE = "https://iot.mi.com"
+BASE = _BASE  # 向后兼容
 QUERY_PROPS_API    = f"{BASE}/cgi-std/api/v1/functionDefine/getInstanceProperties"
 QUERY_ACTIONS_API  = f"{BASE}/cgi-std/api/v1/functionDefine/getInstanceActions"
 QUERY_EVENTS_API   = f"{BASE}/cgi-std/api/v1/functionDefine/getInstanceEvents"
 QUERY_SERVICES_API = f"{BASE}/cgi-std/api/v1/functionDefine/getInstanceServices"
 
-HEADERS = {
-    "accept": "application/json, text/plain, */*",
-    "content-type": "application/json",
-    "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                  "AppleWebKit/537.36 (KHTML, like Gecko) "
-                  "Chrome/146.0.0.0 Safari/537.36",
-    "origin": BASE,
-    "referer": f"{BASE}/",
-}
+HEADERS = dict(_DEFAULT_HEADERS)
 
 
 # ─── API 请求 ─────────────────────────────────────────────────
@@ -204,6 +214,7 @@ def parse_prop_row(prop: dict, service: dict) -> dict:
         "service_name":     service.get("name", ""),
         "siid":             service.get("siid", ""),
         "access":           access_str,
+        "piid":             prop.get("piid", ""),
         # 原始元数据（用于参考，不写入属性定义 Sheet 正文，写到附录 Sheet）
         "_piid":            prop.get("piid", ""),
         "_siid":            service.get("siid", ""),
@@ -221,6 +232,7 @@ def parse_action_row(action: dict, service: dict) -> dict:
         "service_desc":     service.get("description", ""),
         "service_name":     service.get("name", ""),
         "siid":             service.get("siid", ""),
+        "aiid":             action.get("aiid", ""),
         # 原始元数据
         "_aiid":            action.get("aiid", ""),
         "_siid":            service.get("siid", ""),
@@ -237,6 +249,7 @@ def parse_event_row(event: dict, service: dict) -> dict:
         "service_desc":     service.get("description", ""),
         "service_name":     service.get("name", ""),
         "siid":             service.get("siid", ""),
+        "eiid":             event.get("eiid", ""),
         # 原始元数据
         "_eiid":            event.get("eiid", ""),
         "_siid":            service.get("siid", ""),
@@ -261,43 +274,7 @@ _desc_font       = Font(name="Arial", size=9, color="666666")
 _desc_fill       = PatternFill("solid", fgColor="D9E2F3")
 _opt_desc_fill   = PatternFill("solid", fgColor="E8F0FE")
 
-# Excel 列定义（与 create_template.py 保持一致）
-COLUMNS = [
-    # (key,                 header_name,       width, description,                               required)
-    ("name",              "name",              20, "属性英文名\n如: on, mode, delay-time",          True),
-    ("description",       "description",       25, "属性中文描述\n如: 开关, 模式, 延时时间",          True),
-    ("format",            "format",            12, "数据格式\nbool/uint8/uint16/uint32\n/int8/int16/int32/float/string", True),
-    ("service_desc",      "service_desc",      22, "服务中文描述（推荐）\n如: 开关一键、按键1点动毫秒数", True),
-    ("value_list",        "value_list",        35, "枚举值（仅enum类型）\n格式: 0:关闭,1:开启,2:待机",  False),
-    ("value_range_min",   "value_range_min",   14, "数值最小值\n（仅number类型）",                    False),
-    ("value_range_max",   "value_range_max",   14, "数值最大值\n（仅number类型）",                    False),
-    ("value_range_step",  "value_range_step",  14, "数值步长\n（仅number类型）",                     False),
-    ("service_name",      "service_name",      20, "服务英文名\n如: switch, jog-delay-time",         False),
-    ("siid",              "siid",               8, "服务ID（备选）\n直接指定siid，填了则忽略service匹配", False),
-    ("access",            "access",            20, "访问权限\n默认: read,write,notify\n（gattAccess自动等同于access）",              False),
-]
-
-# 方法定义列
-ACTION_COLUMNS = [
-    # (key,                 header_name,       width, description,                               required)
-    ("name",              "name",              20, "方法英文名\n如: toggle, play, reset",           True),
-    ("description",       "description",       25, "方法中文描述\n如: 切换, 播放, 重置",             True),
-    ("normalizationDesc", "normalizationDesc", 20, "规范描述（通常=英文名）",                        False),
-    ("service_desc",      "service_desc",      22, "服务中文描述（推荐）\n如: 开关一键、按键1点动毫秒数", True),
-    ("service_name",      "service_name",      20, "服务英文名\n如: switch, jog-delay-time",         False),
-    ("siid",              "siid",               8, "服务ID（备选）\n直接指定siid，填了则忽略service匹配", False),
-]
-
-# 事件定义列
-EVENT_COLUMNS = [
-    # (key,                 header_name,       width, description,                               required)
-    ("name",              "name",              20, "事件英文名\n如: click, timeout, alarm",         True),
-    ("description",       "description",       25, "事件中文描述\n如: 点击, 超时, 告警",             True),
-    ("normalizationDesc", "normalizationDesc", 20, "规范描述（通常=英文名）",                        False),
-    ("service_desc",      "service_desc",      22, "服务中文描述（推荐）\n如: 开关一键、按键1点动毫秒数", True),
-    ("service_name",      "service_name",      20, "服务英文名\n如: switch, jog-delay-time",         False),
-    ("siid",              "siid",               8, "服务ID（备选）\n直接指定siid，填了则忽略service匹配", False),
-]
+# COLUMNS, ACTION_COLUMNS, EVENT_COLUMNS 已从 miot_common 统一导入
 
 
 def write_prop_sheet(ws, rows: list[dict]):

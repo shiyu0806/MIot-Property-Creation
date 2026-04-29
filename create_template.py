@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
+import os
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
+
+from miot_common import PROPERTY_COLUMNS
 
 wb = Workbook()
 
@@ -28,28 +31,11 @@ required_font = Font(name="Arial", size=9, color="CC0000", bold=True)
 ws = wb.active
 ws.title = "属性定义"
 
-# 列定义: (列名, 宽度, 说明, 是否必填)
-# 必填列在前，可选列在后，用分隔行区分
-columns = [
-    # ── 必填 ──
-    ("name",              20, "属性英文名\n如: on, mode, delay-time",              True),
-    ("description",       25, "属性中文描述\n如: 开关, 模式, 延时时间",               True),
-    ("format",            12, "数据格式\nbool/uint8/uint16/uint32\n/int8/int16/int32/float/string", True),
-    ("service_desc",      22, "服务中文描述（推荐）\n如: 开关一键、按键1点动毫秒数\n用于匹配服务，优先级最高", True),
-    # ── 条件必填（枚举/数值型需填） ──
-    ("value_list",        35, "枚举值（仅enum类型）\n格式: 0:关闭,1:开启,2:待机\n非枚举留空", False),
-    ("value_range_min",   14, "数值最小值\n（仅number类型）",                         False),
-    ("value_range_max",   14, "数值最大值\n（仅number类型）",                         False),
-    ("value_range_step",  14, "数值步长\n（仅number类型）",                           False),
-    # ── 可选 ──
-    ("service_name",      20, "服务英文名\n如: switch, jog-delay-time\n与service_desc配合可精确区分同名服务", False),
-    ("siid",               8, "服务ID（备选）\n直接指定siid，填了则忽略service匹配",    False),
-    ("access",            20, "访问权限\n默认: read,write,notify\n（gattAccess自动等同于access）", False),
-]
+# 列定义: 统一使用 miot_common.PROPERTY_COLUMNS (key, header, width, desc, required)
 
-for col_idx, (name, width, desc, required) in enumerate(columns, 1):
+for col_idx, (key, header, width, desc, required) in enumerate(PROPERTY_COLUMNS, 1):
     fill = header_fill if required else opt_header_fill
-    cell = ws.cell(row=1, column=col_idx, value=name)
+    cell = ws.cell(row=1, column=col_idx, value=header)
     cell.font = header_font
     cell.fill = fill
     cell.alignment = header_align
@@ -158,7 +144,7 @@ ws3 = wb.create_sheet("填写说明")
 instructions = [
     ["项目", "说明"],
     ["快速开始", "1. 在「公共配置」填写必填项（标红项）\n2. 在「属性定义」每行填一个属性\n3. 至少填：name、description、format、service_desc\n4. 运行：python3 miot_create_properties.py --dry-run"],
-    ["服务匹配", "脚本自动匹配属性到服务，优先级：\n1. siid 直接匹配（填了siid列则优先使用）\n2. service_desc 精确匹配（推荐，填服务中文名）\n3. service_name + service_desc 组合匹配\n4. service_name 精确匹配\n\n💡 提示：service_desc 是最简单的匹配方式，如「开关一键」「按键1点动毫秒数」"],
+    ["服务匹配", "脚本自动匹配属性到服务，优先级：\n1. service_name + service_desc 组合精确匹配（区分同名服务）\n2. service_desc 精确匹配（推荐，填服务中文名）\n3. service_name + service_desc 组合模糊匹配\n4. service_name 精确匹配\n5. service_desc 包含匹配\n6. siid 直接匹配（仅当以上都无法匹配时兜底，换产品后siid会变化）\n\n💡 提示：service_desc 是最简单的匹配方式，如「开关一键」「按键1点动毫秒数」"],
     ["格式类型 format", "bool: 布尔开关（自动设valueList=[] valueRange=[]）\nuint8/uint16/uint32: 无符号整数\nint8/int16/int32: 有符号整数\nfloat: 浮点数\nstring: 字符串"],
     ["枚举值 value_list", "仅枚举类型填写\n格式: 数值:描述,数值:描述\n示例: 0:关闭,1:开启,2:待机"],
     ["数值范围 value_range", "仅数值类型填写，三个字段：\nmin: 最小值（默认0）\nmax: 最大值（默认65535）\nstep: 步长（默认1）"],
@@ -186,6 +172,6 @@ for ws_sheet in [ws, ws2, ws3]:
         )
 ws.row_dimensions[2].height = 55
 
-output = "/Users/shiyu/WorkBuddy/20260418171520/MIoT_属性创建模板.xlsx"
+output = os.path.join(os.path.dirname(os.path.abspath(__file__)), "MIoT_属性创建模板.xlsx")
 wb.save(output)
 print(f"模板已保存: {output}")

@@ -16,28 +16,39 @@ import time
 import requests
 from openpyxl import load_workbook
 
+__all__ = [
+    "query_services", "match_service",
+    "build_request_body", "build_action_request_body", "build_event_request_body",
+    "create_property", "create_action", "create_event",
+    "detect_value_type", "read_config", "read_properties", "read_actions", "read_events",
+    "batch_create",
+    "HEADERS", "BASE", "CREATE_PROP_API", "QUERY_SERVICES_API",
+]
+
+from miot_common import (
+    BASE,
+    DEFAULT_HEADERS as HEADERS,
+    build_cookies as _build_cookies,
+    build_params as _build_params,
+    safe_request as _safe_request,
+    safe_int,
+)
+from miot_service_core import modify_iid
+
+# 向后兼容：保留模块级 HEADERS
+HEADERS = dict(HEADERS)
+
 # ─── API ──────────────────────────────────────────────────────
-BASE = "https://iot.mi.com"
 CREATE_PROP_API   = f"{BASE}/cgi-std/post/api/v1/functionDefine/addInstanceProperty"
 CREATE_ACTION_API = f"{BASE}/cgi-std/post/api/v1/functionDefine/addInstanceAction"
 CREATE_EVENT_API  = f"{BASE}/cgi-std/post/api/v1/functionDefine/addInstanceEvent"
 QUERY_PROPS_API   = f"{BASE}/cgi-std/api/v1/functionDefine/getInstanceProperties"
 QUERY_SERVICES_API = f"{BASE}/cgi-std/api/v1/functionDefine/getInstanceServices"
 
-HEADERS = {
-    "accept": "application/json, text/plain, */*",
-    "content-type": "application/json",
-    "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                  "AppleWebKit/537.36 (KHTML, like Gecko) "
-                  "Chrome/146.0.0.0 Safari/537.36",
-    "origin": BASE,
-    "referer": f"{BASE}/",
-}
-
 
 # ─── Excel 读取 ──────────────────────────────────────────────
 
-def read_config(ws) -> dict:
+def read_config(ws) -> dict:  # ws: openpyxl.worksheet.worksheet.Worksheet
     """读取公共配置 Sheet"""
     cfg = {}
     for row in ws.iter_rows(min_row=2, values_only=True):
@@ -91,39 +102,16 @@ def read_events(ws) -> list[dict]:
 # ─── API 请求 ─────────────────────────────────────────────────
 
 def build_cookies(config: dict) -> dict:
-    """构建请求 Cookie"""
-    return {
-        "serviceToken": config.get("serviceToken", ""),
-        "userId": config.get("userId", ""),
-        "xiaomiiot_ph": config.get("xiaomiiot_ph", ""),
-    }
+    """构建请求 Cookie（委托 miot_common）"""
+    return _build_cookies(config)
 
 
 def build_query_params(config: dict, **extra) -> dict:
     """构建 Query 参数"""
-    params = {
-        "userId": config.get("userId", ""),
-        "xiaomiiot_ph": config.get("xiaomiiot_ph", ""),
-        "pdId": config.get("pdId", ""),
-    }
+    params = _build_params(config)
+    params["pdId"] = config.get("pdId", "")
     params.update(extra)
     return params
-
-
-def _safe_request(method: str, url: str, *, max_retries: int = 3,
-                  retry_delay: float = 1.0, **kwargs) -> requests.Response:
-    """带重试的 HTTP 请求，网络错误自动重试"""
-    last_exc = None
-    for attempt in range(1, max_retries + 1):
-        try:
-            resp = requests.request(method, url, timeout=15, **kwargs)
-            return resp
-        except (ConnectionResetError, ConnectionError, OSError) as e:
-            last_exc = e
-            if attempt < max_retries:
-                print(f"  ⚠️ 请求失败(第{attempt}次)，{retry_delay}s后重试: {e}")
-                time.sleep(retry_delay)
-    raise last_exc  # type: ignore
 
 
 def query_services(config: dict) -> list[dict]:
@@ -239,7 +227,7 @@ def parse_access(raw: str) -> list:
     return [a.strip() for a in str(raw).split(",") if a.strip()]
 
 
-def parse_bool(raw) -> bool:
+def parse_bool(raw) -> bool:  # raw: Any
     """解析布尔值"""
     if isinstance(raw, bool):
         return raw
@@ -249,15 +237,6 @@ def parse_bool(raw) -> bool:
 
 def build_request_body(prop: dict, config: dict, service_info: dict = None) -> dict:
     """构造创建属性的请求体"""
-
-    def safe_int(val, default=0):
-        """安全转换为 int，空字符串返回 default"""
-        if val is None or str(val).strip() == "":
-            return default
-        try:
-            return int(val)
-        except (ValueError, TypeError):
-            return default
 
     fmt = str(prop.get("format", "bool")).strip()
     vtype = detect_value_type(fmt, prop)
@@ -320,18 +299,8 @@ def build_request_body(prop: dict, config: dict, service_info: dict = None) -> d
     return body
 
 
-def build_action_request_body(item: dict, config: dict, service_info: dict = None) -> dict:
-    """构造创建方法的请求体"""
-
-    def safe_int(val, default=0):
-        if val is None or str(val).strip() == "":
-            return default
-        try:
-            return int(val)
-        except (ValueError, TypeError):
-            return default
-
-    # 服务信息
+def _build_action_event_base(item: dict, config: dict, service_info: dict = None) -> dict:
+    """构造方法/事件的公共请求体（build_action_request_body 和 build_event_request_body 逻辑相同）"""
     siid = item.get("siid")
     if siid is None or str(siid).strip() == "":
         siid = service_info.get("siid") if service_info else 0
@@ -358,45 +327,16 @@ def build_action_request_body(item: dict, config: dict, service_info: dict = Non
         "description": str(item.get("description", "")),
         "pdId": safe_int(config.get("pdId"), 0),
     }
+
+
+def build_action_request_body(item: dict, config: dict, service_info: dict = None) -> dict:
+    """构造创建方法的请求体"""
+    return _build_action_event_base(item, config, service_info)
 
 
 def build_event_request_body(item: dict, config: dict, service_info: dict = None) -> dict:
-    """构造创建事件的请求体（与方法结构几乎一致）"""
-
-    def safe_int(val, default=0):
-        if val is None or str(val).strip() == "":
-            return default
-        try:
-            return int(val)
-        except (ValueError, TypeError):
-            return default
-
-    siid = item.get("siid")
-    if siid is None or str(siid).strip() == "":
-        siid = service_info.get("siid") if service_info else 0
-    siid = safe_int(siid, 0)
-
-    service_type = item.get("service_type") or item.get("serviceType", "")
-    if not str(service_type).strip() and service_info:
-        service_type = service_info.get("type", "")
-
-    name = str(item.get("name", ""))
-    normalization_desc = str(item.get("normalizationDesc", "") or name)
-
-    return {
-        "version": safe_int(config.get("version"), 1),
-        "status": safe_int(config.get("status"), 0),
-        "siid": siid,
-        "serviceType": str(service_type),
-        "model": str(config.get("model", "")),
-        "connectType": safe_int(config.get("connectType"), 16),
-        "language": config.get("language", "zh_cn") or "zh_cn",
-        "standard": parse_bool(item.get("standard") or config.get("standard", False)),
-        "name": name,
-        "normalizationDesc": normalization_desc,
-        "description": str(item.get("description", "")),
-        "pdId": safe_int(config.get("pdId"), 0),
-    }
+    """构造创建事件的请求体"""
+    return _build_action_event_base(item, config, service_info)
 
 
 # ─── 服务匹配 ────────────────────────────────────────────────
@@ -465,17 +405,29 @@ def match_service(prop: dict, services: list[dict]) -> dict | None:
 
 # ─── 批量执行 ────────────────────────────────────────────────
 
+IID_WHICH_MAP = {
+    "piid": "PIID",
+    "aiid": "AIID",
+    "eiid": "EIID",
+}
+
+
 def batch_create(tasks: list[dict], create_fn, config: dict,
-                 label: str, id_field: str, delay: float) -> tuple[int, int, list]:
+                 label: str, id_field: str, delay: float,
+                 expected_id_field: str = None) -> tuple[int, int, list]:
     """
     通用批量创建函数
     create_fn: 创建函数 (body, config) -> response
     label: 类型标签（属性/方法/事件）
     id_field: 创建成功返回的 ID 字段名（piid/aiid/eiid）
+    expected_id_field: 期望 ID 的字段名（如 "expected_piid"），若提供则创建后校验修正
     """
     success = 0
     failed = 0
+    modified = 0
     results = []
+
+    which_iid = IID_WHICH_MAP.get(id_field, "")
 
     print(f"\n🚀 开始创建 {len(tasks)} 条{label}...\n")
     for t in tasks:
@@ -486,9 +438,38 @@ def batch_create(tasks: list[dict], create_fn, config: dict,
             result_val = resp.get("result")
             if status == 200:
                 new_id = result_val
-                print(f"✅ 成功 ({id_field}={new_id})")
+                result_entry = {"name": t["name"], "status": "success", id_field: new_id, "siid": t["siid"]}
+                modified_this = False
+
+                # 校验并修正 ID
+                if expected_id_field and which_iid:
+                    expected_id = t.get(expected_id_field)
+                    if expected_id is not None and str(expected_id).strip():
+                        try:
+                            expected_id_int = int(expected_id)
+                            if int(new_id) != expected_id_int:
+                                print(f"\n    🔧 {which_iid} {new_id}→{expected_id_int} 修正中...", end="", flush=True)
+                                r = modify_iid(config, t["siid"], new_id, expected_id_int, which_iid)
+                                if r.get("code") == 0 or r.get("status") == 200:
+                                    print(f" ✅ 修正成功")
+                                    modified += 1
+                                    modified_this = True
+                                    result_entry["modified"] = True
+                                    result_entry["original_" + id_field] = new_id
+                                    result_entry["expected_" + id_field] = expected_id_int
+                                else:
+                                    msg = r.get("message", r.get("msg", json.dumps(r, ensure_ascii=False)))
+                                    print(f" ⚠️ 修正失败: {msg}")
+                                    result_entry["modify_error"] = msg
+                        except (ValueError, TypeError):
+                            pass  # 非数字 ID 跳过修正
+
+                if modified_this:
+                    print(f" ✅ 成功 ({id_field}={expected_id_int}, 已修正)")
+                else:
+                    print(f" ✅ 成功 ({id_field}={new_id})")
                 success += 1
-                results.append({"name": t["name"], "status": "success", id_field: new_id, "siid": t["siid"]})
+                results.append(result_entry)
             else:
                 msg = resp.get("message", resp.get("msg", json.dumps(resp, ensure_ascii=False)))
                 print(f"❌ 失败 ({msg})")
@@ -502,7 +483,7 @@ def batch_create(tasks: list[dict], create_fn, config: dict,
         time.sleep(delay)
 
     print(f"\n{'='*50}")
-    print(f"📊 {label}创建完成: 成功 {success} / 失败 {failed} / 共 {len(tasks)}")
+    print(f"📊 {label}创建完成: 成功 {success} / 失败 {failed} / 修正 {modified} / 共 {len(tasks)}")
     if failed > 0:
         print(f"\n❌ 失败列表:")
         for r in results:
@@ -617,10 +598,12 @@ def main():
                 continue
 
             body = build_request_body(prop, config, svc)
+            expected_piid = prop.get("piid")
             prop_tasks.append({
                 "index": i + 1, "name": name, "desc": prop.get("description", ""),
                 "format": fmt, "value_type": vtype, "siid": siid,
                 "service_name": sname, "body": body,
+                "expected_piid": expected_piid,
             })
 
         if prop_tasks:
@@ -649,9 +632,11 @@ def main():
                 continue
 
             body = build_action_request_body(item, config, svc)
+            expected_aiid = item.get("aiid")
             action_tasks.append({
                 "index": i + 1, "name": name, "desc": item.get("description", ""),
                 "siid": siid, "service_name": sname, "body": body,
+                "expected_aiid": expected_aiid,
             })
 
         if action_tasks:
@@ -680,9 +665,11 @@ def main():
                 continue
 
             body = build_event_request_body(item, config, svc)
+            expected_eiid = item.get("eiid")
             event_tasks.append({
                 "index": i + 1, "name": name, "desc": item.get("description", ""),
                 "siid": siid, "service_name": sname, "body": body,
+                "expected_eiid": expected_eiid,
             })
 
         if event_tasks:
@@ -729,15 +716,15 @@ def main():
     all_results = []
 
     if prop_tasks:
-        _, _, res = batch_create(prop_tasks, create_property, config, "属性", "piid", args.delay)
+        _, _, res = batch_create(prop_tasks, create_property, config, "属性", "piid", args.delay, expected_id_field="expected_piid")
         all_results.extend(res)
 
     if action_tasks:
-        _, _, res = batch_create(action_tasks, create_action, config, "方法", "aiid", args.delay)
+        _, _, res = batch_create(action_tasks, create_action, config, "方法", "aiid", args.delay, expected_id_field="expected_aiid")
         all_results.extend(res)
 
     if event_tasks:
-        _, _, res = batch_create(event_tasks, create_event, config, "事件", "eiid", args.delay)
+        _, _, res = batch_create(event_tasks, create_event, config, "事件", "eiid", args.delay, expected_id_field="expected_eiid")
         all_results.extend(res)
 
     # 总汇总

@@ -13,18 +13,22 @@ import time
 
 import requests
 
-BASE = "https://iot.mi.com"
+__all__ = [
+    "get_services", "sync_services",
+    "read_service_config_excel", "read_service_list_excel",
+    "parse_service_str", "check_product_status",
+    "modify_iid",
+]
 
-SERVICE_HEADERS = {
-    "accept": "application/json, text/plain, */*",
-    "content-type": "application/json",
-    "origin": BASE,
-    "user-agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/146.0.0.0 Safari/537.36"
-    ),
-}
+from miot_common import (
+    BASE,
+    DEFAULT_HEADERS as SERVICE_HEADERS,
+    build_cookies as _build_cookies,
+    build_params as _build_params,
+    safe_request as _safe_request,
+)
+
+SERVICE_HEADERS = dict(SERVICE_HEADERS)  # 向后兼容：保留模块级名称
 
 GET_SERVICES_API  = f"{BASE}/cgi-std/api/v1/functionDefine/getInstanceServices"
 ADD_SERVICE_API   = f"{BASE}/cgi-std/post/api/v1/functionDefine/addInstanceService"
@@ -102,43 +106,17 @@ def check_product_status(config: dict) -> tuple:
 # ─── 低层 HTTP ────────────────────────────────────────────────
 
 def _cookies(config: dict) -> dict:
-    return {
-        "userId": str(config.get("userId", "")),
-        "xiaomiiot_ph": str(config.get("xiaomiiot_ph", "")),
-        "serviceToken": str(config.get("serviceToken", "")),
-    }
+    return _build_cookies(config)
 
 def _params(config: dict) -> dict:
-    return {
-        "userId": str(config.get("userId", "")),
-        "xiaomiiot_ph": str(config.get("xiaomiiot_ph", "")),
-    }
+    return _build_params(config)
 
-def _headers(pd_id=None) -> dict:
+def _headers(pd_id: int | str | None = None) -> dict:
     h = dict(SERVICE_HEADERS)
     h["referer"] = (
         f"{BASE}/fe-op/productCenter/config/function?productId={pd_id or ''}"
     )
     return h
-
-
-def _safe_request(method: str, url: str, *, max_retries: int = 3,
-                  retry_delay: float = 1.0, log_fn=None, **kwargs) -> requests.Response:
-    """带重试的 HTTP 请求，网络错误自动重试"""
-    last_exc = None
-    for attempt in range(1, max_retries + 1):
-        try:
-            resp = requests.request(method, url, timeout=30, **kwargs)
-            return resp
-        except (ConnectionResetError, ConnectionError, OSError) as e:
-            last_exc = e
-            if attempt < max_retries:
-                if log_fn:
-                    log_fn(f"  ⚠️ 请求失败(第{attempt}次)，{retry_delay}s后重试: {e}")
-                else:
-                    print(f"  ⚠️ 请求失败(第{attempt}次)，{retry_delay}s后重试: {e}")
-                time.sleep(retry_delay)
-    raise last_exc  # type: ignore
 
 
 # ─── 查询服务 ─────────────────────────────────────────────────
@@ -206,7 +184,7 @@ def create_service(config: dict, name: str, description: str = "",
 
 # ─── 修正 siid ────────────────────────────────────────────────
 
-def modify_siid(config: dict, service_id, old_siid: int, new_siid: int) -> dict:
+def modify_siid(config: dict, service_id: int | str, old_siid: int, new_siid: int) -> dict:
     """修正服务的 siid"""
     pd_id = config.get("pdId", "")
     payload = {
@@ -227,6 +205,34 @@ def modify_siid(config: dict, service_id, old_siid: int, new_siid: int) -> dict:
         return resp.json()
     except Exception:
         raise RuntimeError(f"修正 siid API 返回非 JSON (HTTP {resp.status_code}): {resp.text[:300] or '(空响应)'}")
+
+
+# ─── 通用 IID 修正（PIID / AIID / EIID）────────────────────────
+
+def modify_iid(config: dict, service_id: int | str, old_iid: int, new_iid: int, which_iid: str) -> dict:
+    """修正属性/方法/事件的 IID
+    which_iid: "PIID" / "AIID" / "EIID"
+    复用与 modify_siid 相同的 API 端点，仅 whichIid 字段不同
+    """
+    pd_id = config.get("pdId", "")
+    payload = {
+        "model": config.get("model", ""),
+        "pdId": int(pd_id) if pd_id else 0,
+        "version": "1",
+        "serviceId": service_id,
+        "oldIid": old_iid,
+        "whichIid": which_iid,
+        "newIid": new_iid,
+    }
+    resp = _safe_request("POST", MODIFY_SIID_API,
+                         params=_params(config),
+                         cookies=_cookies(config),
+                         headers=_headers(pd_id),
+                         json=payload)
+    try:
+        return resp.json()
+    except Exception:
+        raise RuntimeError(f"修正 {which_iid} API 返回非 JSON (HTTP {resp.status_code}): {resp.text[:300] or '(空响应)'}")
 
 
 # ─── 解析服务的 serviceStr ────────────────────────────────────

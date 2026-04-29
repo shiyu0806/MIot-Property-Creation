@@ -15,15 +15,29 @@ API:
     有 key、src、scId 等触发字段
 """
 
+__all__ = [
+    "get_automation_list", "check_standard_automation",
+    "save_automation", "sync_automations",
+    "read_automation_excel", "write_automation_export_excel",
+]
+
 import requests
 import json
 import time
 
 from miot_service_core import check_product_status
+from miot_common import (
+    BASE as _BASE,
+    DEFAULT_HEADERS as _DEFAULT_HEADERS,
+    build_cookies as _build_cookies,
+    build_params as _build_params,
+    safe_request as _safe_request_impl,
+    safe_int,
+)
 
 # ─── API 端点 ─────────────────────────────────────────────────
 
-BASE = "https://iot.mi.com"
+BASE = _BASE  # 向后兼容：保留模块级 BASE
 LIST_API = f"{BASE}/cgi-op/api/v1/productcenter/automation/list"
 CHECK_API = f"{BASE}/cgi-op/api/v1/productcenter/automation/check/standard/automation"
 SAVE_IF_API = f"{BASE}/cgi-op/api/v1/productcenter/automation/launch/save"
@@ -34,27 +48,13 @@ SAVE_THEN_GROUP_API = f"{BASE}/cgi-op/api/v1/productcenter/automation/group/acti
 # ─── 请求辅助 ─────────────────────────────────────────────────
 
 def _headers():
-    return {
-        "Accept": "application/json, text/plain, */*",
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                      "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
-        "Origin": BASE,
-        "Referer": f"{BASE}/",
-    }
+    return dict(_DEFAULT_HEADERS)
 
 def _cookies(config: dict) -> dict:
-    return {
-        "serviceToken": config["serviceToken"],
-        "userId": str(config["userId"]),
-        "xiaomiiot_ph": config["xiaomiiot_ph"],
-    }
+    return _build_cookies(config)
 
 def _params(config: dict) -> dict:
-    return {
-        "userId": str(config["userId"]),
-        "xiaomiiot_ph": config["xiaomiiot_ph"],
-    }
+    return _build_params(config)
 
 
 # ─── 带重试的通用请求 ──────────────────────────────────────
@@ -66,21 +66,8 @@ RETRY_DELAY = 1  # 秒
 def _safe_request(method: str, url: str, *, max_retries: int = MAX_RETRIES,
                   retry_delay: float = RETRY_DELAY, log_fn=None, **kwargs) -> requests.Response:
     """带重试的 HTTP 请求，网络错误自动重试，业务错误直接返回"""
-    last_exc = None
-    for attempt in range(1, max_retries + 1):
-        try:
-            resp = requests.request(method, url, timeout=30, **kwargs)
-            return resp
-        except (ConnectionResetError, ConnectionError, OSError) as e:
-            last_exc = e
-            if attempt < max_retries:
-                label = kwargs.get("params", {}).get("pdId", url)
-                if log_fn:
-                    log_fn(f"  ⚠️ 请求失败(第{attempt}次)，{retry_delay}s后重试: {e}")
-                else:
-                    print(f"  ⚠️ 请求失败(第{attempt}次)，{retry_delay}s后重试: {e}")
-                time.sleep(retry_delay)
-    raise last_exc  # type: ignore
+    return _safe_request_impl(method, url, max_retries=max_retries,
+                              retry_delay=retry_delay, log_fn=log_fn, **kwargs)
 
 
 # ─── 从 specRelate 解析 specType ─────────────────────────────
@@ -647,13 +634,6 @@ def save_automation(config: dict, auto_item: dict, is_update: bool = False) -> d
 
         api = SAVE_IF_API
         params = {**_params(config), "isUpdate": str(is_update).lower()}
-
-    # 调试：写入临时文件
-    try:
-        with open(f"/tmp/miot_save_debug_{tr_type}.json", "w") as f:
-            json.dump({"tr_type": tr_type, "api": api, "payload": payload}, f, ensure_ascii=False, default=str, indent=2)
-    except Exception:
-        pass
 
     resp = _safe_request("POST", api, params=params,
                          cookies=_cookies(config), headers=_headers(),

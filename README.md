@@ -28,6 +28,9 @@ GUI 版本（`miot_gui.py`）将三套功能整合为统一界面，命令行版
 # 安装依赖（含服务层 pandas 依赖）
 pip install openpyxl requests PyQt6 pandas
 
+# 可选：抓包工具依赖（capture_api.py 使用）
+pip install playwright && playwright install chromium
+
 # 启动整合版 GUI
 python miot_gui.py
 ```

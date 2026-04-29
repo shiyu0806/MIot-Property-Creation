@@ -62,6 +62,7 @@ from miot_service_core import (
     read_service_list_excel,
     parse_service_str,
     check_product_status,
+    modify_iid,
 )
 # ── 自动化核心
 from miot_automation_core import (
@@ -264,6 +265,10 @@ class ExportPropWorker(QThread):
         self.ph = ph; self.userid = userid; self.connect_type = connect_type
         self.output_path = output_path; self.save_json = save_json
         self.delay = delay
+        self._cancel_flag = False
+
+    def cancel(self):
+        self._cancel_flag = True
 
     def run(self):
         try:
@@ -334,6 +339,9 @@ class ExportPropWorker(QThread):
             self.progress.emit(f"✅ 找到 {len(services)} 个服务")
 
             for i, svc in enumerate(services):
+                if self._cancel_flag:
+                    self.finished_err.emit("⚠️ 用户取消")
+                    return
                 siid = svc.get("siid", "?")
                 sname = svc.get("description", svc.get("name", ""))
                 stype = svc.get("type", "")
@@ -432,12 +440,19 @@ class CreatePropWorker(QThread):
         super().__init__()
         self.config = config; self.props = props
         self.services = services; self.delay = delay
+        self._cancel_flag = False
+
+    def cancel(self):
+        self._cancel_flag = True
 
     def run(self):
         try:
             success = failed = 0
             results = []
             for i, prop in enumerate(self.props):
+                if self._cancel_flag:
+                    self.progress.emit("⚠️ 用户取消，已停止创建")
+                    break
                 name = prop.get("name", f"行{i+1}")
                 svc = match_service(prop, self.services)
                 siid = svc["siid"] if svc else prop.get("siid", "?")
@@ -449,9 +464,36 @@ class CreatePropWorker(QThread):
                     resp = create_property(body, self.config)
                     if resp.get("status") == 200:
                         piid = resp.get("result")
-                        self.progress.emit(f"  ✅ {name} 成功 (piid={piid})")
-                        success += 1
-                        results.append({"name": name, "status": "success", "piid": piid, "siid": siid})
+                        # 校验并修正 piid
+                        expected_piid = prop.get("piid")
+                        if expected_piid and str(expected_piid).strip():
+                            try:
+                                expected_piid_int = int(expected_piid)
+                                if int(piid) != expected_piid_int:
+                                    self.progress.emit(f"    🔧 PIID {piid}→{expected_piid_int} 修正中...")
+                                    r = modify_iid(self.config, siid, piid, expected_piid_int, "PIID")
+                                    if r.get("code") == 0 or r.get("status") == 200:
+                                        self.progress.emit(f"  ✅ {name} 成功 (piid={expected_piid_int}, 已修正)")
+                                        success += 1
+                                        results.append({"name": name, "status": "success", "piid": expected_piid_int, "original_piid": piid, "siid": siid})
+                                    else:
+                                        msg_m = r.get("message", r.get("msg", str(r)))
+                                        self.progress.emit(f"  ⚠️ {name} 修正失败: {msg_m}")
+                                        self.progress.emit(f"  ✅ {name} 成功 (piid={piid})")
+                                        success += 1
+                                        results.append({"name": name, "status": "success", "piid": piid, "modify_error": msg_m, "siid": siid})
+                                else:
+                                    self.progress.emit(f"  ✅ {name} 成功 (piid={piid})")
+                                    success += 1
+                                    results.append({"name": name, "status": "success", "piid": piid, "siid": siid})
+                            except (ValueError, TypeError):
+                                self.progress.emit(f"  ✅ {name} 成功 (piid={piid})")
+                                success += 1
+                                results.append({"name": name, "status": "success", "piid": piid, "siid": siid})
+                        else:
+                            self.progress.emit(f"  ✅ {name} 成功 (piid={piid})")
+                            success += 1
+                            results.append({"name": name, "status": "success", "piid": piid, "siid": siid})
                     else:
                         msg = resp.get("message", resp.get("msg", json.dumps(resp, ensure_ascii=False)))
                         self.progress.emit(f"  ❌ {name} 失败 ({msg})")
@@ -486,12 +528,19 @@ class CreateAllWorker(QThread):
         super().__init__()
         self.config = config; self.tasks = tasks
         self.services = services; self.delay = delay
+        self._cancel_flag = False
+
+    def cancel(self):
+        self._cancel_flag = True
 
     def run(self):
         try:
             success = failed = 0
             results = []
             for i, (type_label, item, build_fn, create_fn, id_field, svc) in enumerate(self.tasks):
+                if self._cancel_flag:
+                    self.progress.emit("⚠️ 用户取消，已停止创建")
+                    break
                 name = item.get("name", f"行{i+1}")
                 siid = svc["siid"] if svc else item.get("siid", "?")
                 sname = svc.get("description", svc.get("name", "")) if svc else "未匹配"
@@ -502,9 +551,38 @@ class CreateAllWorker(QThread):
                     resp = create_fn(body, self.config)
                     if resp.get("status") == 200:
                         new_id = resp.get("result")
-                        self.progress.emit(f"  ✅ [{type_label}] {name} 成功 ({id_field}={new_id})")
-                        success += 1
-                        results.append({"type": type_label, "name": name, "status": "success", id_field: new_id, "siid": siid})
+                        # 校验并修正 ID
+                        expected_id = item.get(id_field)
+                        which_iid_map = {"piid": "PIID", "aiid": "AIID", "eiid": "EIID"}
+                        which_iid = which_iid_map.get(id_field, "")
+                        if expected_id and which_iid and str(expected_id).strip():
+                            try:
+                                expected_id_int = int(expected_id)
+                                if int(new_id) != expected_id_int:
+                                    self.progress.emit(f"    🔧 {which_iid} {new_id}→{expected_id_int} 修正中...")
+                                    r = modify_iid(self.config, siid, new_id, expected_id_int, which_iid)
+                                    if r.get("code") == 0 or r.get("status") == 200:
+                                        self.progress.emit(f"  ✅ [{type_label}] {name} 成功 ({id_field}={expected_id_int}, 已修正)")
+                                        success += 1
+                                        results.append({"type": type_label, "name": name, "status": "success", id_field: expected_id_int, "original_id": new_id, "siid": siid})
+                                    else:
+                                        msg_m = r.get("message", r.get("msg", str(r)))
+                                        self.progress.emit(f"  ⚠️ [{type_label}] {name} 修正失败: {msg_m}")
+                                        self.progress.emit(f"  ✅ [{type_label}] {name} 成功 ({id_field}={new_id})")
+                                        success += 1
+                                        results.append({"type": type_label, "name": name, "status": "success", id_field: new_id, "modify_error": msg_m, "siid": siid})
+                                else:
+                                    self.progress.emit(f"  ✅ [{type_label}] {name} 成功 ({id_field}={new_id})")
+                                    success += 1
+                                    results.append({"type": type_label, "name": name, "status": "success", id_field: new_id, "siid": siid})
+                            except (ValueError, TypeError):
+                                self.progress.emit(f"  ✅ [{type_label}] {name} 成功 ({id_field}={new_id})")
+                                success += 1
+                                results.append({"type": type_label, "name": name, "status": "success", id_field: new_id, "siid": siid})
+                        else:
+                            self.progress.emit(f"  ✅ [{type_label}] {name} 成功 ({id_field}={new_id})")
+                            success += 1
+                            results.append({"type": type_label, "name": name, "status": "success", id_field: new_id, "siid": siid})
                     else:
                         msg = resp.get("message", resp.get("msg", json.dumps(resp, ensure_ascii=False)))
                         self.progress.emit(f"  ❌ [{type_label}] {name} 失败 ({msg})")
@@ -1213,8 +1291,8 @@ class ExportPropTab(QWidget):
 
     def _cancel(self):
         if self._worker and self._worker.isRunning():
-            self._worker.terminate()
-            self.log.append("⚠️ 已取消")
+            self._worker.cancel()
+            self.log.append("⚠️ 取消请求已发送")
         self._reset()
 
     def _done_ok(self, path):
@@ -1507,8 +1585,8 @@ class CreatePropTab(QWidget):
 
     def _cancel(self):
         if self._worker and self._worker.isRunning():
-            self._worker.terminate()
-            self.log.append("⚠️ 已取消")
+            self._worker.cancel()
+            self.log.append("⚠️ 取消请求已发送")
         self._set_btns(running=False)
 
     def _done_ok(self, success, failed):
