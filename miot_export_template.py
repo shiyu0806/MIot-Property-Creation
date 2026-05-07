@@ -27,6 +27,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from miot_common import (
     BASE as _BASE,
     DEFAULT_HEADERS as _DEFAULT_HEADERS,
+    TEMPLATE_VERSION,
     build_cookies as _build_cookies,
     build_params as _build_params,
     safe_request as _safe_request,
@@ -407,6 +408,7 @@ def write_config_sheet(ws2, args):
         cell.border = _thin_border
 
     configs = [
+        ["template_version", TEMPLATE_VERSION, "模板版本（自动生成，请勿修改）"],
         # 必填（已自动填入）
         ["userId",       args.userid,  "⚠️ 小米账号用户ID（必填）"],
         ["pdId",         "",           "⚠️ 目标产品ID（必填，请修改为目标产品）"],
@@ -433,7 +435,7 @@ def write_config_sheet(ws2, args):
             ws2.cell(row=row_idx, column=c).alignment = Alignment(vertical="center")
 
     # 标红必填项
-    for row in range(2, 7):
+    for row in range(3, 8):
         ws2.cell(row=row, column=1).font = Font(name="Arial", bold=True, size=10, color="CC0000")
         ws2.cell(row=row, column=3).font = Font(name="Arial", size=9, color="CC0000")
 

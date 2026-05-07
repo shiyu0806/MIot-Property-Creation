@@ -31,8 +31,7 @@ jobs:
           python-version: '3.13'
 
       - name: Install dependencies
-        run: |
-          pip install pyinstaller openpyxl requests pandas PyQt6 PyQt6-WebEngine
+        run: pip install -r requirements.txt
 
       - name: Build
         run: python build_exe.py

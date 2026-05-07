@@ -9,6 +9,7 @@ import subprocess
 import sys
 import os
 import shutil
+import importlib.util
 
 # Windows 编码修复
 if sys.platform == 'win32':
@@ -18,6 +19,31 @@ if sys.platform == 'win32':
 
 # Windows 下 PyInstaller 打印中文会编码报错，用 ASCII 名
 APP_NAME = 'MIoT_Tool' if sys.platform == 'win32' else 'MIoT平台工具'
+
+REQUIRED_MODULES = [
+    ("PyInstaller", "PyInstaller"),
+    ("PyQt6", "PyQt6"),
+    ("PyQt6.QtWebEngineWidgets", "PyQt6-WebEngine"),
+    ("openpyxl", "openpyxl"),
+    ("pandas", "pandas"),
+    ("requests", "requests"),
+]
+
+
+def check_dependencies():
+    """打包前检查关键依赖，提前给出可执行的修复提示。"""
+    missing = []
+    for module_name, package_name in REQUIRED_MODULES:
+        if importlib.util.find_spec(module_name) is None:
+            missing.append(package_name)
+
+    if missing:
+        print("✗ 缺少打包依赖:")
+        for pkg in missing:
+            print(f"  - {pkg}")
+        print("\n请先运行: pip install -r requirements.txt")
+        sys.exit(1)
+    print("✓ 依赖检查通过")
 
 def clean():
     """清理旧文件"""
@@ -57,6 +83,14 @@ def build():
         '--hidden-import', 'miot_create_properties',
         '--hidden-import', 'miot_service_core',
         '--hidden-import', 'miot_automation_core',
+        '--hidden-import', 'miot_gui_automation_tabs',
+        '--hidden-import', 'miot_gui_auth_ui',
+        '--hidden-import', 'miot_gui_common',
+        '--hidden-import', 'miot_gui_property_tabs',
+        '--hidden-import', 'miot_gui_service_tabs',
+        '--hidden-import', 'miot_gui_styles',
+        '--hidden-import', 'miot_gui_workers',
+        '--hidden-import', 'miot_reports',
         '--hidden-import', 'create_template',
         'miot_gui.py'
     ]
@@ -80,5 +114,6 @@ def build():
         sys.exit(1)
 
 if __name__ == '__main__':
+    check_dependencies()
     clean()
     build()

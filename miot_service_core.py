@@ -26,6 +26,9 @@ from miot_common import (
     build_cookies as _build_cookies,
     build_params as _build_params,
     safe_request as _safe_request,
+    parse_json_response,
+    is_success_response,
+    response_message,
 )
 
 SERVICE_HEADERS = dict(SERVICE_HEADERS)  # 向后兼容：保留模块级名称
@@ -76,12 +79,12 @@ def check_product_status(config: dict) -> tuple:
     try:
         resp = _safe_request("GET", PRODUCT_LIST_API, params=params,
                              cookies=_cookies(config), headers=check_headers)
-        data = resp.json()
+        data = parse_json_response(resp, "查询产品状态 API")
     except Exception as e:
         return (False, -1, "查询失败", f"查询产品状态失败: {e}")
 
-    if data.get("status") != 200:
-        return (False, -1, "查询失败", f"查询产品状态失败: {data.get('message', data)}")
+    if not is_success_response(data):
+        return (False, -1, "查询失败", f"查询产品状态失败: {response_message(data, str(data))}")
 
     products = data.get("result") or []
     target = None
@@ -135,10 +138,7 @@ def get_services(config: dict) -> list[dict]:
 
     resp = _safe_request("GET", GET_SERVICES_API, params=params,
                          cookies=_cookies(config), headers=_headers())
-    try:
-        data = resp.json()
-    except Exception:
-        raise RuntimeError(f"API 返回非 JSON (HTTP {resp.status_code}): {resp.text[:300] or '(空响应)'}。常见原因：Cookie 过期")
+    data = parse_json_response(resp, "查询服务列表 API")
     return data.get("result") or data.get("data") or []
 
 
@@ -166,10 +166,7 @@ def create_service(config: dict, name: str, description: str = "",
                          cookies=_cookies(config),
                          headers=_headers(pd_id),
                          json=payload)
-    try:
-        result = resp.json()
-    except Exception:
-        raise RuntimeError(f"创建服务 API 返回非 JSON (HTTP {resp.status_code}): {resp.text[:300] or '(空响应)'}")
+    result = parse_json_response(resp, "创建服务 API")
 
     # 注入 .siid 方便上层读取
     if result.get("code") == 0:
@@ -201,10 +198,7 @@ def modify_siid(config: dict, service_id: int | str, old_siid: int, new_siid: in
                          cookies=_cookies(config),
                          headers=_headers(pd_id),
                          json=payload)
-    try:
-        return resp.json()
-    except Exception:
-        raise RuntimeError(f"修正 siid API 返回非 JSON (HTTP {resp.status_code}): {resp.text[:300] or '(空响应)'}")
+    return parse_json_response(resp, "修正 siid API")
 
 
 # ─── 通用 IID 修正（PIID / AIID / EIID）────────────────────────
@@ -229,10 +223,7 @@ def modify_iid(config: dict, service_id: int | str, old_iid: int, new_iid: int, 
                          cookies=_cookies(config),
                          headers=_headers(pd_id),
                          json=payload)
-    try:
-        return resp.json()
-    except Exception:
-        raise RuntimeError(f"修正 {which_iid} API 返回非 JSON (HTTP {resp.status_code}): {resp.text[:300] or '(空响应)'}")
+    return parse_json_response(resp, f"修正 {which_iid} API")
 
 
 # ─── 解析服务的 serviceStr ────────────────────────────────────
@@ -364,7 +355,7 @@ def sync_services(
                 if not dry_run:
                     svc_id = existing[key].get("serviceId", actual_siid)
                     r = modify_siid(config, svc_id, actual_siid, expected_siid)
-                    if r.get("code") == 0 or r.get("status") == 200:
+                    if is_success_response(r):
                         log(f"    ✅ 修正成功")
                         fixed += 1
                         results.append({"name": name, "action": "fix", "siid": expected_siid})
@@ -390,7 +381,7 @@ def sync_services(
                         svc_data = r.get("data") or r.get("result")
                         svc_id = svc_data.get("serviceId") if isinstance(svc_data, dict) else new_siid
                         fr = modify_siid(config, svc_id or new_siid, new_siid, expected_siid)
-                        if fr.get("code") == 0 or fr.get("status") == 200:
+                        if is_success_response(fr):
                             log(f"    ✅ 创建成功 siid={expected_siid} (修正自{new_siid})")
                             created += 1
                             results.append({"name": name, "action": "create_fix", "siid": expected_siid, "original_siid": new_siid})

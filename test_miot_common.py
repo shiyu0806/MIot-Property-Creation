@@ -9,19 +9,27 @@ miot_common.py + miot_create_properties.py 核心函数单元测试
 import sys
 import os
 import unittest
+import tempfile
+from unittest.mock import Mock, patch
+
+from openpyxl import Workbook
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from miot_common import (
     build_cookies, build_params, build_headers, safe_int, safe_request,
-    BASE, DEFAULT_HEADERS,
+    parse_json_response, is_success_response, response_message,
+    BASE, DEFAULT_HEADERS, TEMPLATE_VERSION,
     PROPERTY_COLUMNS, ACTION_COLUMNS, EVENT_COLUMNS,
 )
 from miot_create_properties import (
     match_service, detect_value_type, parse_value_list,
     build_request_body, build_action_request_body, build_event_request_body,
     _build_action_event_base, parse_bool, parse_access,
+    load_property_excel, read_properties,
+    validate_config, validate_items, validate_tasks,
 )
+from miot_reports import write_dry_run_plan, write_execution_report
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -90,6 +98,45 @@ class TestBuildHeaders(unittest.TestCase):
         assert h["referer"] == "https://example.com"
 
 
+class TestApiResponseHelpers(unittest.TestCase):
+    def test_parse_json_response_ok(self):
+        resp = Mock(status_code=200)
+        resp.json.return_value = {"status": 200, "result": []}
+        assert parse_json_response(resp, "测试 API") == {"status": 200, "result": []}
+
+    def test_parse_json_response_non_json_login_hint(self):
+        resp = Mock(status_code=200, text="<html>passport login</html>")
+        resp.json.side_effect = ValueError("no json")
+        try:
+            parse_json_response(resp, "测试 API")
+        except RuntimeError as exc:
+            msg = str(exc)
+            assert "测试 API 返回非 JSON" in msg
+            assert "登录态失效" in msg
+        else:
+            raise AssertionError("parse_json_response should reject non-json responses")
+
+    def test_parse_json_response_rejects_list(self):
+        resp = Mock(status_code=200)
+        resp.json.return_value = []
+        try:
+            parse_json_response(resp, "测试 API")
+        except RuntimeError as exc:
+            assert "返回结构异常" in str(exc)
+        else:
+            raise AssertionError("parse_json_response should reject non-object JSON")
+
+    def test_is_success_response(self):
+        assert is_success_response({"status": 200}) is True
+        assert is_success_response({"code": 0}) is True
+        assert is_success_response({"status": 500}) is False
+
+    def test_response_message(self):
+        assert response_message({"message": "失败"}) == "失败"
+        assert response_message({"msg": "错误"}) == "错误"
+        assert response_message({}) == "未知错误"
+
+
 class TestConstants(unittest.TestCase):
     def test_base_url(self):
         assert BASE == "https://iot.mi.com"
@@ -99,6 +146,163 @@ class TestConstants(unittest.TestCase):
             assert len(col_def) == 5, f"列定义应为 5 元组: {col_def}"
             assert isinstance(col_def[2], int), f"宽度应为 int: {col_def}"
             assert isinstance(col_def[4], bool), f"required 应为 bool: {col_def}"
+
+    def test_template_version(self):
+        assert TEMPLATE_VERSION
+
+
+class TestExcelLoading(unittest.TestCase):
+    def test_read_properties_uses_name_column(self):
+        wb = Workbook()
+        ws = wb.active
+        ws.append(["name", "description", "format"])
+        ws.append(["说明", "说明", "说明"])
+        ws.append([None, "空名称", "bool"])
+        ws.append(["on", "开关", "bool"])
+        rows = read_properties(ws)
+        assert len(rows) == 1
+        assert rows[0]["name"] == "on"
+
+    def test_load_property_excel_missing_config_sheet(self):
+        wb = Workbook()
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+            path = tmp.name
+        try:
+            wb.save(path)
+            try:
+                load_property_excel(path)
+            except ValueError as exc:
+                assert "公共配置" in str(exc)
+            else:
+                raise AssertionError("load_property_excel should require 公共配置 Sheet")
+        finally:
+            os.remove(path)
+
+
+class TestReportWriters(unittest.TestCase):
+    def test_write_dry_run_plan(self):
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+            path = tmp.name
+        try:
+            write_dry_run_plan(path, [{
+                "type": "属性", "index": 1, "name": "on",
+                "plan_status": "待创建",
+            }])
+            assert os.path.exists(path)
+            assert os.path.getsize(path) > 0
+        finally:
+            os.remove(path)
+
+    def test_write_execution_report(self):
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+            path = tmp.name
+        try:
+            write_execution_report(path, [{
+                "type": "属性", "name": "on", "status": "success", "piid": 1,
+            }])
+            assert os.path.exists(path)
+            assert os.path.getsize(path) > 0
+        finally:
+            os.remove(path)
+
+    def test_load_property_excel_ok(self):
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "属性定义"
+        ws.append(["name", "description", "format"])
+        ws.append(["说明", "说明", "说明"])
+        ws.append(["on", "开关", "bool"])
+        ws2 = wb.create_sheet("公共配置")
+        ws2.append(["配置项", "值", "说明"])
+        ws2.append(["template_version", TEMPLATE_VERSION, ""])
+        ws2.append(["userId", "123", ""])
+
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+            path = tmp.name
+        try:
+            wb.save(path)
+            config, props, actions, events = load_property_excel(path)
+            assert config["template_version"] == TEMPLATE_VERSION
+            assert config["userId"] == "123"
+            assert props[0]["name"] == "on"
+            assert actions == []
+            assert events == []
+        finally:
+            os.remove(path)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 输入校验测试
+# ═══════════════════════════════════════════════════════════════════
+
+class TestValidation(unittest.TestCase):
+    def test_validate_config_ok(self):
+        cfg = {
+            "serviceToken": "token", "xiaomiiot_ph": "ph",
+            "userId": "123", "pdId": "456", "model": "test.device",
+        }
+        assert validate_config(cfg) == []
+
+    def test_validate_config_missing(self):
+        errors = validate_config({"userId": "123"})
+        assert any("serviceToken" in e for e in errors)
+        assert any("pdId" in e for e in errors)
+
+    def test_validate_property_items_ok(self):
+        items = [{
+            "name": "mode", "description": "模式", "format": "uint8",
+            "value_list": "0:关闭,1:开启",
+        }]
+        assert validate_items(items, "property", "属性定义") == []
+
+    def test_validate_property_items_rejects_bad_enum(self):
+        items = [{
+            "name": "mode", "description": "模式", "format": "uint8",
+            "value_list": "broken",
+        }]
+        errors = validate_items(items, "property", "属性定义")
+        assert any("value_list 格式错误" in e for e in errors)
+
+    def test_validate_property_items_rejects_bad_format(self):
+        items = [{"name": "x", "description": "X", "format": "object"}]
+        errors = validate_items(items, "property", "属性定义")
+        assert any("format 不支持" in e for e in errors)
+
+    def test_validate_property_items_accepts_float_range(self):
+        items = [{
+            "name": "temperature", "description": "温度", "format": "float",
+            "value_range_min": "-20.5", "value_range_max": "80.5",
+            "value_range_step": "0.1",
+        }]
+        assert validate_items(items, "property", "属性定义") == []
+
+    def test_validate_property_items_rejects_bad_float_range(self):
+        items = [{
+            "name": "temperature", "description": "温度", "format": "float",
+            "value_range_min": "low",
+        }]
+        errors = validate_items(items, "property", "属性定义")
+        assert any("不是有效数字" in e for e in errors)
+
+    def test_validate_property_items_allows_duplicate_name(self):
+        items = [
+            {"name": "mode", "description": "模式1", "format": "uint8"},
+            {"name": "mode", "description": "模式2", "format": "uint8"},
+        ]
+        assert validate_items(items, "property", "属性定义") == []
+
+    def test_validate_items_duplicate_name(self):
+        items = [
+            {"name": "toggle", "description": "切换"},
+            {"name": "toggle", "description": "切换2"},
+        ]
+        errors = validate_items(items, "action", "方法定义")
+        assert any("name 重复" in e for e in errors)
+
+    def test_validate_tasks_rejects_missing_siid(self):
+        tasks = [{"index": 1, "name": "on", "siid": "?"}]
+        errors = validate_tasks(tasks, "属性定义")
+        assert any("未匹配到有效服务" in e for e in errors)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -280,6 +484,17 @@ class TestBuildRequestBody(unittest.TestCase):
         assert body["format"] == "uint8"
         assert body["valueRange"] == [0, 100, 1]
 
+    def test_float_property_range(self):
+        prop = {
+            "name": "temperature", "description": "温度", "format": "float",
+            "access": "read,notify", "value_list": "",
+            "value_range_min": "-20.5", "value_range_max": "80.5", "value_range_step": "0.1",
+            "standard": "", "valueType": "", "unit": "", "piid": "",
+        }
+        body = build_request_body(prop, self.config, self.service_info)
+        assert body["format"] == "float"
+        assert body["valueRange"] == [-20.5, 80.5, 0.1]
+
 
 # ═══════════════════════════════════════════════════════════════════
 # build_action / build_event 测试
@@ -315,14 +530,24 @@ class TestBuildActionEventBody(unittest.TestCase):
 
 class TestSafeRequest(unittest.TestCase):
     def test_success(self):
-        resp = safe_request("GET", "https://httpbin.org/get", timeout=5, max_retries=1)
+        mocked_resp = Mock(status_code=200)
+        with patch("requests.request", return_value=mocked_resp) as request:
+            resp = safe_request("GET", "https://example.com/get", timeout=5, max_retries=1)
         assert resp.status_code == 200
+        request.assert_called_once()
 
     def test_retry_on_connection_error(self):
-        try:
-            safe_request("GET", "http://localhost:1", timeout=1, max_retries=2)
-        except Exception:
-            pass
+        with patch("requests.request", side_effect=ConnectionError("boom")) as request:
+            try:
+                safe_request(
+                    "GET", "http://localhost:1", timeout=1,
+                    max_retries=2, retry_delay=0, log_fn=lambda _: None,
+                )
+            except Exception as exc:
+                assert "boom" in str(exc)
+            else:
+                raise AssertionError("safe_request should raise after retries")
+        assert request.call_count == 2
 
 
 if __name__ == "__main__":

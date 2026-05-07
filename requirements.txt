@@ -1,0 +1,6 @@
+openpyxl
+pandas
+PyInstaller
+PyQt6
+PyQt6-WebEngine
+requests

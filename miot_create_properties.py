@@ -20,8 +20,9 @@ __all__ = [
     "query_services", "match_service",
     "build_request_body", "build_action_request_body", "build_event_request_body",
     "create_property", "create_action", "create_event",
-    "detect_value_type", "read_config", "read_properties", "read_actions", "read_events",
-    "batch_create",
+    "detect_value_type", "load_property_excel",
+    "read_config", "read_properties", "read_actions", "read_events",
+    "validate_config", "validate_items", "validate_tasks", "batch_create",
     "HEADERS", "BASE", "CREATE_PROP_API", "QUERY_SERVICES_API",
 ]
 
@@ -31,9 +32,12 @@ from miot_common import (
     build_cookies as _build_cookies,
     build_params as _build_params,
     safe_request as _safe_request,
+    parse_json_response,
+    is_success_response,
+    response_message,
     safe_int,
 )
-from miot_service_core import modify_iid
+from miot_service_core import check_product_status, modify_iid
 
 # 向后兼容：保留模块级 HEADERS
 HEADERS = dict(HEADERS)
@@ -85,8 +89,8 @@ def read_sheet_items(ws, name_col_idx: int = 2) -> list[dict]:
 
 
 def read_properties(ws) -> list[dict]:
-    """读取属性定义 Sheet，返回属性列表（name在第3列，index=2）"""
-    return read_sheet_items(ws, name_col_idx=2)
+    """读取属性定义 Sheet，返回属性列表（name在第1列，index=0）"""
+    return read_sheet_items(ws, name_col_idx=0)
 
 
 def read_actions(ws) -> list[dict]:
@@ -97,6 +101,123 @@ def read_actions(ws) -> list[dict]:
 def read_events(ws) -> list[dict]:
     """读取事件定义 Sheet，返回事件列表（name在第1列，index=0）"""
     return read_sheet_items(ws, name_col_idx=0)
+
+
+def load_property_excel(path: str) -> tuple[dict, list[dict], list[dict], list[dict]]:
+    """读取属性/方法/事件 Excel，统一处理 Sheet 缺失和旧模板兼容。"""
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"文件不存在: {path}")
+
+    wb = load_workbook(path)
+    if "公共配置" not in wb.sheetnames:
+        raise ValueError("Excel 缺少「公共配置」Sheet")
+
+    config = read_config(wb["公共配置"])
+    props = read_properties(wb["属性定义"]) if "属性定义" in wb.sheetnames else []
+    actions = read_actions(wb["方法定义"]) if "方法定义" in wb.sheetnames else []
+    events = read_events(wb["事件定义"]) if "事件定义" in wb.sheetnames else []
+    return config, props, actions, events
+
+
+# ─── 输入校验 ────────────────────────────────────────────────
+
+REQUIRED_CONFIG_KEYS = ("serviceToken", "xiaomiiot_ph", "userId", "pdId", "model")
+
+ITEM_REQUIRED_FIELDS = {
+    "property": ("name", "description", "format"),
+    "action": ("name", "description"),
+    "event": ("name", "description"),
+}
+
+NUMERIC_FORMATS = {"uint8", "uint16", "uint32", "int8", "int16", "int32", "float"}
+
+
+def _has_value(value) -> bool:
+    return value is not None and str(value).strip() != ""
+
+
+def _parse_range_value(value, default, fmt: str):
+    """按属性 format 解析 valueRange 数值；float 保留小数，其余格式转 int。"""
+    if not _has_value(value):
+        return default
+    if fmt == "float":
+        return float(value)
+    return int(value)
+
+
+def validate_config(config: dict) -> list[str]:
+    """校验公共配置，返回错误列表。"""
+    errors = []
+    for key in REQUIRED_CONFIG_KEYS:
+        if not _has_value(config.get(key)):
+            errors.append(f"公共配置缺少必填项: {key}")
+    return errors
+
+
+def validate_items(items: list[dict], item_type: str, label: str) -> list[str]:
+    """校验属性/方法/事件定义的基础字段和局部格式。"""
+    errors = []
+    required = ITEM_REQUIRED_FIELDS[item_type]
+    seen_names = set()
+
+    for row_no, item in enumerate(items, 3):
+        name = str(item.get("name") or "").strip()
+        for field in required:
+            if not _has_value(item.get(field)):
+                errors.append(f"{label}第 {row_no} 行缺少必填字段: {field}")
+
+        if item_type != "property" and name:
+            if name in seen_names:
+                errors.append(f"{label}第 {row_no} 行 name 重复: {name}")
+            seen_names.add(name)
+
+        siid = item.get("siid")
+        if _has_value(siid) and safe_int(siid, -1) < 0:
+            errors.append(f"{label}第 {row_no} 行 siid 不是有效数字: {siid}")
+
+        expected_id_key = {"property": "piid", "action": "aiid", "event": "eiid"}[item_type]
+        expected_id = item.get(expected_id_key)
+        if _has_value(expected_id) and safe_int(expected_id, -1) < 0:
+            errors.append(f"{label}第 {row_no} 行 {expected_id_key} 不是有效数字: {expected_id}")
+
+        if item_type != "property":
+            continue
+
+        fmt = str(item.get("format") or "").strip()
+        if fmt not in ("bool", "string", *NUMERIC_FORMATS):
+            errors.append(f"{label}第 {row_no} 行 format 不支持: {fmt or '(空)'}")
+
+        if detect_value_type(fmt, item) == "enum":
+            try:
+                value_list = parse_value_list(item.get("value_list", ""))
+            except (TypeError, ValueError):
+                errors.append(f"{label}第 {row_no} 行 value_list 格式错误，应类似 0:关闭,1:开启")
+            else:
+                if not value_list:
+                    errors.append(f"{label}第 {row_no} 行 value_list 格式错误，应类似 0:关闭,1:开启")
+
+        if detect_value_type(fmt, item) == "number":
+            for key in ("value_range_min", "value_range_max", "value_range_step"):
+                value = item.get(key)
+                if not _has_value(value):
+                    continue
+                try:
+                    _parse_range_value(value, 0.0 if fmt == "float" else 0, fmt)
+                except (TypeError, ValueError):
+                    unit = "数字" if fmt == "float" else "整数"
+                    errors.append(f"{label}第 {row_no} 行 {key} 不是有效{unit}: {value}")
+
+    return errors
+
+
+def validate_tasks(tasks: list[dict], label: str) -> list[str]:
+    """校验已解析任务，主要拦截服务未匹配导致的无效 siid。"""
+    errors = []
+    for task in tasks:
+        siid = task.get("siid")
+        if not _has_value(siid) or safe_int(siid, 0) <= 0:
+            errors.append(f"{label}第 {task.get('index', '?')} 行未匹配到有效服务: {task.get('name', '')}")
+    return errors
 
 
 # ─── API 请求 ─────────────────────────────────────────────────
@@ -126,9 +247,9 @@ def query_services(config: dict) -> list[dict]:
     )
     resp = _safe_request("GET", QUERY_SERVICES_API, params=params,
                          headers=HEADERS, cookies=build_cookies(config))
-    data = resp.json()
-    if data.get("status") != 200:
-        print(f"❌ 查询服务列表失败: {data}")
+    data = parse_json_response(resp, "查询服务列表 API")
+    if not is_success_response(data):
+        print(f"❌ 查询服务列表失败: {response_message(data, str(data))}")
         return []
     return data.get("result", [])
 
@@ -147,8 +268,8 @@ def query_properties(siid: int, service_type: str, config: dict) -> list[dict]:
     })
     resp = _safe_request("GET", QUERY_PROPS_API, params=params,
                          headers=HEADERS, cookies=build_cookies(config))
-    data = resp.json()
-    if data.get("status") != 200:
+    data = parse_json_response(resp, "查询属性列表 API")
+    if not is_success_response(data):
         return []
     return data.get("result", [])
 
@@ -158,7 +279,7 @@ def create_property(body: dict, config: dict) -> dict:
     params = build_query_params(config)
     resp = _safe_request("POST", CREATE_PROP_API, params=params, json=body,
                          headers=HEADERS, cookies=build_cookies(config))
-    return resp.json()
+    return parse_json_response(resp, "创建属性 API")
 
 
 def create_action(body: dict, config: dict) -> dict:
@@ -166,7 +287,7 @@ def create_action(body: dict, config: dict) -> dict:
     params = build_query_params(config)
     resp = _safe_request("POST", CREATE_ACTION_API, params=params, json=body,
                          headers=HEADERS, cookies=build_cookies(config))
-    return resp.json()
+    return parse_json_response(resp, "创建方法 API")
 
 
 def create_event(body: dict, config: dict) -> dict:
@@ -174,7 +295,7 @@ def create_event(body: dict, config: dict) -> dict:
     params = build_query_params(config)
     resp = _safe_request("POST", CREATE_EVENT_API, params=params, json=body,
                          headers=HEADERS, cookies=build_cookies(config))
-    return resp.json()
+    return parse_json_response(resp, "创建事件 API")
 
 
 # ─── 属性类型识别 & 请求体构造 ───────────────────────────────
@@ -257,9 +378,9 @@ def build_request_body(prop: dict, config: dict, service_info: dict = None) -> d
         vr_max = prop.get("value_range_max")
         vr_step = prop.get("value_range_step")
         value_range = [
-            int(vr_min) if vr_min is not None and str(vr_min).strip() else 0,
-            int(vr_max) if vr_max is not None and str(vr_max).strip() else 65535,
-            int(vr_step) if vr_step is not None and str(vr_step).strip() else 1,
+            _parse_range_value(vr_min, 0.0 if fmt == "float" else 0, fmt),
+            _parse_range_value(vr_max, 65535.0 if fmt == "float" else 65535, fmt),
+            _parse_range_value(vr_step, 1.0 if fmt == "float" else 1, fmt),
         ]
 
     # 服务信息 - 优先用属性行内值，其次用查到的服务信息，最后用公共配置
@@ -434,9 +555,8 @@ def batch_create(tasks: list[dict], create_fn, config: dict,
         print(f"  [{t['index']}] {t['name']} ({t['desc']}) → siid={t['siid']} ... ", end="", flush=True)
         try:
             resp = create_fn(t["body"], config)
-            status = resp.get("status")
             result_val = resp.get("result")
-            if status == 200:
+            if is_success_response(resp):
                 new_id = result_val
                 result_entry = {"name": t["name"], "status": "success", id_field: new_id, "siid": t["siid"]}
                 modified_this = False
@@ -450,7 +570,7 @@ def batch_create(tasks: list[dict], create_fn, config: dict,
                             if int(new_id) != expected_id_int:
                                 print(f"\n    🔧 {which_iid} {new_id}→{expected_id_int} 修正中...", end="", flush=True)
                                 r = modify_iid(config, t["siid"], new_id, expected_id_int, which_iid)
-                                if r.get("code") == 0 or r.get("status") == 200:
+                                if is_success_response(r):
                                     print(f" ✅ 修正成功")
                                     modified += 1
                                     modified_this = True
@@ -458,7 +578,7 @@ def batch_create(tasks: list[dict], create_fn, config: dict,
                                     result_entry["original_" + id_field] = new_id
                                     result_entry["expected_" + id_field] = expected_id_int
                                 else:
-                                    msg = r.get("message", r.get("msg", json.dumps(r, ensure_ascii=False)))
+                                    msg = response_message(r, json.dumps(r, ensure_ascii=False))
                                     print(f" ⚠️ 修正失败: {msg}")
                                     result_entry["modify_error"] = msg
                         except (ValueError, TypeError):
@@ -471,7 +591,7 @@ def batch_create(tasks: list[dict], create_fn, config: dict,
                 success += 1
                 results.append(result_entry)
             else:
-                msg = resp.get("message", resp.get("msg", json.dumps(resp, ensure_ascii=False)))
+                msg = response_message(resp, json.dumps(resp, ensure_ascii=False))
                 print(f"❌ 失败 ({msg})")
                 failed += 1
                 results.append({"name": t["name"], "status": "failed", "error": msg, "siid": t["siid"]})
@@ -530,26 +650,22 @@ def main():
     args = parser.parse_args()
 
     # 读取 Excel
-    if not os.path.exists(args.excel):
-        print(f"❌ 文件不存在: {args.excel}")
+    try:
+        config, props, actions, events = load_property_excel(args.excel)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"❌ {e}")
         sys.exit(1)
 
-    wb = load_workbook(args.excel)
-    config = read_config(wb["公共配置"])
+    validation_errors = []
+    validation_errors.extend(validate_config(config))
+    validation_errors.extend(validate_items(props, "property", "属性定义"))
+    validation_errors.extend(validate_items(actions, "action", "方法定义"))
+    validation_errors.extend(validate_items(events, "event", "事件定义"))
 
-    # 读取各 Sheet（存在则读取，不存在则为空列表）
-    props = read_properties(wb["属性定义"]) if "属性定义" in wb.sheetnames else []
-    actions = read_actions(wb["方法定义"]) if "方法定义" in wb.sheetnames else []
-    events = read_events(wb["事件定义"]) if "事件定义" in wb.sheetnames else []
-
-    # 检查必填配置
-    missing = []
-    for key in ["serviceToken", "xiaomiiot_ph", "userId", "pdId", "model"]:
-        if not config.get(key):
-            missing.append(key)
-    if missing:
-        print(f"❌ 公共配置缺少必填项: {', '.join(missing)}")
-        print("   请在 Excel「公共配置」Sheet 中填写")
+    if validation_errors:
+        print("❌ Excel 校验未通过:")
+        for err in validation_errors:
+            print(f"   - {err}")
         sys.exit(1)
 
     total_items = len(props) + len(actions) + len(events)
@@ -576,6 +692,15 @@ def main():
 
     if args.list_services:
         return
+
+    if not args.dry_run:
+        print("🔍 检查目标产品状态...")
+        is_ok, status, status_name, msg = check_product_status(config)
+        if is_ok:
+            print(f"✅ {msg}")
+        else:
+            print(f"❌ {msg}")
+            sys.exit(1)
 
     # ── 解析属性任务 ──
     prop_tasks = []
@@ -683,6 +808,17 @@ def main():
     total_tasks = len(prop_tasks) + len(action_tasks) + len(event_tasks)
     if total_tasks == 0:
         print("❌ 没有匹配的任务")
+        sys.exit(1)
+
+    task_errors = []
+    task_errors.extend(validate_tasks(prop_tasks, "属性定义"))
+    task_errors.extend(validate_tasks(action_tasks, "方法定义"))
+    task_errors.extend(validate_tasks(event_tasks, "事件定义"))
+    if task_errors:
+        print("\n❌ 任务校验未通过:")
+        for err in task_errors:
+            print(f"   - {err}")
+        print("   请检查 service_desc / service_name，或填写有效 siid 后重试")
         sys.exit(1)
 
     # 汇总

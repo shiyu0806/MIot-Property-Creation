@@ -26,7 +26,7 @@ GUI 版本（`miot_gui.py`）将三套功能整合为统一界面，命令行版
 
 ```bash
 # 安装依赖（含服务层 pandas 依赖）
-pip install openpyxl requests PyQt6 pandas
+pip install -r requirements.txt
 
 # 可选：抓包工具依赖（capture_api.py 使用）
 pip install playwright && playwright install chromium
@@ -62,7 +62,7 @@ GUI 界面分为三个大 Tab：
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install openpyxl requests
+pip install -r requirements.txt
 ```
 
 **Windows（PowerShell）：**
@@ -70,7 +70,7 @@ pip install openpyxl requests
 ```powershell
 python -m venv .venv
 .venv\Scripts\activate
-pip install openpyxl requests
+pip install -r requirements.txt
 ```
 
 > 💡 如果 `python3` 命令不存在，尝试 `python`。虚拟环境激活后，后续命令统一使用 `python`（不再需要 `.venv/bin/python` 或 `.venv\Scripts\python` 前缀）。

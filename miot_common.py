@@ -10,7 +10,9 @@ import requests
 
 __all__ = [
     "BASE", "DEFAULT_HEADERS",
+    "TEMPLATE_VERSION",
     "build_cookies", "build_params", "build_headers", "safe_request",
+    "parse_json_response", "is_success_response", "response_message",
     "safe_int",
     "PROPERTY_COLUMNS", "ACTION_COLUMNS", "EVENT_COLUMNS",
 ]
@@ -18,6 +20,8 @@ __all__ = [
 # ─── 公共常量 ─────────────────────────────────────────────────
 
 BASE = "https://iot.mi.com"
+
+TEMPLATE_VERSION = "2.0"
 
 DEFAULT_HEADERS = {
     "accept": "application/json, text/plain, */*",
@@ -89,6 +93,35 @@ def safe_request(
                     print(f"  ⚠️ 请求失败(第{attempt}次)，{retry_delay}s后重试: {e}")
                 time.sleep(retry_delay)
     raise last_exc  # type: ignore
+
+
+# ─── API 响应解析 ─────────────────────────────────────────────
+
+def parse_json_response(resp: requests.Response, context: str = "API") -> dict:
+    """解析 JSON 响应；非 JSON 时给出更可读的登录/响应异常提示。"""
+    try:
+        data = resp.json()
+    except Exception:
+        text = resp.text[:300] if getattr(resp, "text", "") else "(空响应)"
+        lower = text.lower()
+        hint = ""
+        if "<html" in lower or "login" in lower or "passport" in lower:
+            hint = "。常见原因：Cookie 过期或登录态失效，请重新登录"
+        raise RuntimeError(f"{context} 返回非 JSON (HTTP {resp.status_code}): {text}{hint}")
+
+    if not isinstance(data, dict):
+        raise RuntimeError(f"{context} 返回结构异常，应为 JSON 对象，实际为 {type(data).__name__}")
+    return data
+
+
+def is_success_response(data: dict) -> bool:
+    """兼容 MIoT 平台常见成功标记：status=200 或 code=0。"""
+    return data.get("status") == 200 or data.get("code") == 0
+
+
+def response_message(data: dict, default: str = "未知错误") -> str:
+    """从 API 响应中提取用户可读错误信息。"""
+    return str(data.get("message") or data.get("msg") or data.get("desc") or default)
 
 
 # ─── 安全类型转换 ─────────────────────────────────────────────

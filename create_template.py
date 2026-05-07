@@ -5,7 +5,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
-from miot_common import PROPERTY_COLUMNS
+from miot_common import PROPERTY_COLUMNS, TEMPLATE_VERSION
 
 wb = Workbook()
 
@@ -99,6 +99,7 @@ for col_idx, h in enumerate(config_headers, 1):
     cell.border = thin_border
 
 configs = [
+    ["template_version", TEMPLATE_VERSION, "模板版本（自动生成，请勿修改）"],
     # ── 必填 ──
     ["userId",        "", "⚠️ 小米账号用户ID（必填）"],
     ["pdId",          "", "⚠️ 产品ID（必填）"],
@@ -130,7 +131,7 @@ for row_idx, (key, val, desc) in enumerate(configs, 2):
         ws2.cell(row=row_idx, column=c).alignment = Alignment(vertical="center")
 
 # 标红必填项
-for row in range(2, 7):  # 前5行是必填
+for row in range(3, 8):  # template_version 后 5 行是必填
     ws2.cell(row=row, column=1).font = Font(name="Arial", bold=True, size=10, color="CC0000")
     ws2.cell(row=row, column=3).font = Font(name="Arial", size=9, color="CC0000")
 

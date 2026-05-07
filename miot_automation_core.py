@@ -32,6 +32,9 @@ from miot_common import (
     build_cookies as _build_cookies,
     build_params as _build_params,
     safe_request as _safe_request_impl,
+    parse_json_response,
+    is_success_response,
+    response_message,
     safe_int,
 )
 
@@ -86,10 +89,11 @@ def _fix_item_model(config: dict, item: dict):
     """预处理：确保 item 中所有 model 相关字段使用目标产品的 model。
     从 key/command 中提取源 model，替换 key/value/command/groupSceneDto 中的引用。
     同时修正 item.model 为空的问题。
+    返回被替换的源 model；没有替换时返回空字符串。
     """
     target_model = config.get("model", "")
     if not target_model:
-        return
+        return ""
 
     # 尝试从多个来源提取源 model
     source_model = ""
@@ -141,6 +145,8 @@ def _fix_item_model(config: dict, item: dict):
     if not item_model or item_model != target_model:
         item["model"] = target_model
 
+    return source_model
+
 
 def _parse_spec_type(spec_relate: str) -> str:
     """从 specRelate 字段推断 specType
@@ -179,14 +185,10 @@ def get_automation_list(config: dict) -> list:
     params = {**_params(config), "pdId": str(config["pdId"])}
     resp = _safe_request("GET", LIST_API, params=params,
                          cookies=_cookies(config), headers=_headers())
-    try:
-        data = resp.json()
-    except Exception:
-        raise RuntimeError(f"查询自动化列表 API 返回非 JSON (HTTP {resp.status_code}): "
-                           f"{resp.text[:300] or '(空响应)'}")
+    data = parse_json_response(resp, "查询自动化列表 API")
 
-    if data.get("status") != 200 and data.get("code") != 0:
-        raise RuntimeError(f"查询自动化列表失败: {data}")
+    if not is_success_response(data):
+        raise RuntimeError(f"查询自动化列表失败: {response_message(data, str(data))}")
 
     result = data.get("result") or data.get("data") or {}
     if isinstance(result, list):
@@ -452,11 +454,7 @@ def check_standard_automation(config: dict, auto_item: dict) -> dict:
                              **{k: v for k, v in _headers().items() if k != "Content-Type"},
                          },
                          files={k: (None, v) for k, v in fields.items()})
-    try:
-        return resp.json()
-    except Exception:
-        raise RuntimeError(f"检查标准自动化 API 返回非 JSON (HTTP {resp.status_code}): "
-                           f"{resp.text[:300] or '(空响应)'}")
+    return parse_json_response(resp, "检查标准自动化 API")
 
 
 # ─── 保存自动化 ────────────────────────────────────────────────
@@ -638,11 +636,7 @@ def save_automation(config: dict, auto_item: dict, is_update: bool = False) -> d
     resp = _safe_request("POST", api, params=params,
                          cookies=_cookies(config), headers=_headers(),
                          json=payload)
-    try:
-        return resp.json()
-    except Exception:
-        raise RuntimeError(f"保存自动化 API 返回非 JSON (HTTP {resp.status_code}): "
-                           f"{resp.text[:300] or '(空响应)'}")
+    return parse_json_response(resp, "保存自动化 API")
 
 
 # ─── 查询属性定义（用于自动生成聚合选值的 actionList）──────────
@@ -665,14 +659,10 @@ def get_property_definitions(config: dict, use_cache: bool = True) -> dict:
                          params=_params(config),
                          cookies=_cookies(config),
                          headers=_headers())
-    try:
-        data = resp.json()
-    except Exception:
-        raise RuntimeError(f"查询属性定义 API 返回非 JSON (HTTP {resp.status_code}): "
-                           f"{resp.text[:300] or '(空响应)'}")
+    data = parse_json_response(resp, "查询属性定义 API")
 
-    if data.get("status") != 200:
-        raise RuntimeError(f"查询属性定义失败: {data.get('message', data)}")
+    if not is_success_response(data):
+        raise RuntimeError(f"查询属性定义失败: {response_message(data, str(data))}")
 
     result = data.get("result") or data.get("data") or []
     prop_map = {}
@@ -767,61 +757,10 @@ def sync_automations(config: dict, auto_items: list,
             return results
 
     # 预处理：确保 command/key 中的 model 与目标 model 一致
-    target_model = config.get("model", "")
     for item in auto_items:
-        if not target_model:
-            continue
-        # 从 command 中提取源 model 前缀（最可靠的来源）
-        command = item.get("command", "")
-        source_model = ""
-        if command:
-            # command 格式: {source_model}.set_properties 或 {source_model}.action
-            cmd_base = command.split(".set_properties")[0].split(".action")[0]
-            if cmd_base and cmd_base != target_model:
-                source_model = cmd_base
-        # 兜底：从 key 中提取
-        if not source_model:
-            key = item.get("key", "")
-            if key:
-                key_parts = key.split(".")
-                if len(key_parts) >= 4:
-                    source_model_in_key = ".".join(key_parts[1:-2])
-                    if source_model_in_key and source_model_in_key != target_model:
-                        source_model = source_model_in_key
-        # 兜底：从 item.model 中提取
-        if not source_model:
-            item_model = item.get("model", "")
-            if item_model and item_model != target_model:
-                source_model = item_model
-
+        source_model = _fix_item_model(config, item)
         if source_model:
-            # 替换 item 中所有字符串字段里的源 model
-            for key in ("command", "key", "model", "specRelate", "value"):
-                val = item.get(key, "")
-                if isinstance(val, str) and source_model in val:
-                    item[key] = _replace_source_model(val, source_model, target_model)
-            # 替换 groupSceneDto 中的字段
-            gsd = item.get("groupSceneDto")
-            if isinstance(gsd, dict):
-                for key in ("command", "key", "model", "specRelate", "value"):
-                    val = gsd.get(key, "")
-                    if isinstance(val, str) and source_model in val:
-                        gsd[key] = _replace_source_model(val, source_model, target_model)
-            # 替换 actionList 中的 model 和 value
-            al = item.get("actionList")
-            if isinstance(al, list):
-                for action in al:
-                    if isinstance(action, dict):
-                        for key in ("command", "model", "specRelate", "value"):
-                            val = action.get(key, "")
-                            if isinstance(val, str) and source_model in val:
-                                action[key] = _replace_source_model(val, source_model, target_model)
-                        # pdId 替换为目标产品
-                        if "pdId" in action:
-                            action["pdId"] = int(config.get("pdId", 0))
-            # 确保 model 字段是目标 model
-            item["model"] = target_model
-            log_fn and log_fn(f"  🔄 Model 替换: {source_model} → {target_model}")
+            log_fn and log_fn(f"  🔄 Model 替换: {source_model} → {config.get('model', '')}")
 
     for i, item in enumerate(auto_items):
         if cancelled_fn and cancelled_fn():
@@ -846,13 +785,12 @@ def sync_automations(config: dict, auto_items: list,
 
             # 保存
             save_result = save_automation(config, item)
-            save_status = save_result.get("status") or save_result.get("code")
             log_fn and log_fn(f"  📋 保存结果: {json.dumps(save_result, ensure_ascii=False)[:300]}")
-            if save_result.get("status") == 200 or save_result.get("code") == 0:
+            if is_success_response(save_result):
                 log_fn and log_fn(f"  ✅ 创建成功: {intro}")
                 results["success"].append({"intro": intro, "type": tr_type, "result": save_result})
             else:
-                msg = save_result.get("message", save_result.get("msg", json.dumps(save_result, ensure_ascii=False)))
+                msg = response_message(save_result, json.dumps(save_result, ensure_ascii=False))
                 log_fn and log_fn(f"  ❌ 创建失败: {intro} ({msg})")
                 results["failed"].append({"intro": intro, "type": tr_type, "error": msg, "result": save_result})
         except Exception as e:

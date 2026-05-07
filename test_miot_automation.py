@@ -121,7 +121,8 @@ class TestFixItemModel(unittest.TestCase):
             "key": "4.1.2",
             "model": "xhuan.switch.4prz03",
         }
-        _fix_item_model(config, item)
+        source_model = _fix_item_model(config, item)
+        assert source_model == "xhuan.switch.4prz03"
         assert item["command"] == "gudi.switch.swy007.set_properties"
         assert item["model"] == "gudi.switch.swy007"
 
@@ -133,21 +134,24 @@ class TestFixItemModel(unittest.TestCase):
             "key": "4.xhuan.switch.4prz03.3.1",
             "model": "",
         }
-        _fix_item_model(config, item)
+        source_model = _fix_item_model(config, item)
+        assert source_model == "xhuan.switch.4prz03"
         assert "gudi.switch.swy007" in item["key"]
 
     def test_no_replace_when_same_model(self):
         """目标 model 和源 model 相同则不替换"""
         config = {"model": "xhuan.switch.4prz03"}
         item = {"command": "xhuan.switch.4prz03.set_properties", "model": "xhuan.switch.4prz03"}
-        _fix_item_model(config, item)
+        source_model = _fix_item_model(config, item)
+        assert source_model == ""
         assert item["command"] == "xhuan.switch.4prz03.set_properties"
 
     def test_empty_model(self):
         """config 没有 model，不处理"""
         config = {"model": ""}
         item = {"command": "xhuan.switch.4prz03.set_properties"}
-        _fix_item_model(config, item)
+        source_model = _fix_item_model(config, item)
+        assert source_model == ""
         assert item["command"] == "xhuan.switch.4prz03.set_properties"
 
     def test_replace_group_scene_dto(self):
@@ -162,9 +166,31 @@ class TestFixItemModel(unittest.TestCase):
                 "key": "4.xhuan.switch.4prz03.3.1",
             },
         }
-        _fix_item_model(config, item)
+        source_model = _fix_item_model(config, item)
+        assert source_model == "xhuan.switch.4prz03"
         assert "gudi.switch.swy007" in item["groupSceneDto"]["command"]
         assert "gudi.switch.swy007" in item["groupSceneDto"]["key"]
+
+    def test_replace_action_list_pd_id(self):
+        """替换 actionList 中的 model，并把 pdId 改成目标产品"""
+        config = {"model": "gudi.switch.swy007", "pdId": "456"}
+        item = {
+            "command": "xhuan.switch.4prz03.set_properties",
+            "model": "xhuan.switch.4prz03",
+            "actionList": [{
+                "pdId": 123,
+                "model": "xhuan.switch.4prz03",
+                "command": "xhuan.switch.4prz03.set_properties",
+                "value": "xhuan.switch.4prz03:value",
+            }],
+        }
+        source_model = _fix_item_model(config, item)
+        assert source_model == "xhuan.switch.4prz03"
+        action = item["actionList"][0]
+        assert action["pdId"] == 456
+        assert action["model"] == "gudi.switch.swy007"
+        assert action["command"] == "gudi.switch.swy007.set_properties"
+        assert action["value"] == "gudi.switch.swy007:value"
 
 
 # ═══════════════════════════════════════════════════════════════════
