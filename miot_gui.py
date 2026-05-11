@@ -431,6 +431,16 @@ class MIoTMainWindow(QMainWindow):
 # ─── Entry ────────────────────────────────────────────────────
 
 def main():
+    # ── PyInstaller frozen 环境下的 GPU/RHI 安全回退 ──
+    # onefile 模式或部分 macOS 机型上，Qt 的 Metal 渲染管线在临时目录中
+    # 编译 shader 会导致堆内存损坏 (free_list_checksum_botch → SIGABRT)。
+    # 强制使用 Software OpenGL 或禁用 RHI shader 缓存可避免此问题。
+    import os
+    if getattr(sys, 'frozen', False):
+        os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
+        os.environ.setdefault("QT_QUICK_BACKEND", "software")
+        os.environ.setdefault("QT_OPENGL", "software")
+
     # WebEngine 必须在 QApplication 创建前导入
     from PyQt6.QtWebEngineWidgets import QWebEngineView  # noqa: F401
 

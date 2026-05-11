@@ -57,9 +57,13 @@ def clean():
 
 def build():
     """打包"""
+    # 使用 --onedir 替代 --onefile。
+    # onefile 会把所有文件解压到临时目录运行，而 PyQt6 WebEngine 的 Chromium 子进程
+    # 和 macOS Metal/RHI 渲染引擎在临时目录下会崩溃（shader 缓存路径异常导致堆损坏 SIGABRT）。
+    # onedir 模式下资源文件在稳定的目录中，不会出现此问题。
     cmd = [
         sys.executable, '-m', 'PyInstaller',
-        '--onefile',
+        '--onedir',
         '--windowed',
         '--name', APP_NAME,
         # PyQt6
@@ -79,6 +83,8 @@ def build():
         # pandas（服务层新增）
         '--hidden-import', 'pandas',
         # 项目模块
+        '--hidden-import', 'miot_auth',
+        '--hidden-import', 'miot_common',
         '--hidden-import', 'miot_export_template',
         '--hidden-import', 'miot_create_properties',
         '--hidden-import', 'miot_service_core',
