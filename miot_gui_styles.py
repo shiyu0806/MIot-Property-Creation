@@ -17,7 +17,7 @@ QTabBar::tab {
     border-top-right-radius: 6px;
     font-size: 13px;
     font-weight: bold;
-    color: #555;
+    color: #000;
 }
 QTabBar::tab:selected {
     background: white;
@@ -82,7 +82,7 @@ QProgressBar {
 }
 QProgressBar::chunk { background-color: #3498db; border-radius: 3px; }
 QLabel#titleLabel   { font-size: 18px; font-weight: bold; color: #2c3e50; }
-QLabel#subtitleLabel { font-size: 12px; color: #7f8c8d; }
+QLabel#subtitleLabel { font-size: 12px; color: #000; }
 /* 企业下拉 */
 QComboBox#entCombo {
     background-color: transparent;

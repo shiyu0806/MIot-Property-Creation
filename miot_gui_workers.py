@@ -35,6 +35,7 @@ from miot_service_core import (
     sync_services,
     parse_service_str,
     modify_iid,
+    modify_with_retry,
 )
 from miot_automation_core import (
     get_automation_list,
@@ -267,17 +268,18 @@ class CreatePropWorker(QThread):
                                 expected_piid_int = int(expected_piid)
                                 if int(piid) != expected_piid_int:
                                     self.progress.emit(f"    🔧 PIID {piid}→{expected_piid_int} 修正中...")
-                                    r = modify_iid(self.config, siid, piid, expected_piid_int, "PIID")
-                                    if is_success_response(r):
+                                    ok, r = modify_with_retry(modify_iid, self.config, siid, piid, expected_piid_int, "PIID", log_fn=self.progress.emit)
+                                    if ok:
                                         self.progress.emit(f"  ✅ {name} 成功 (piid={expected_piid_int}, 已修正)")
                                         success += 1
                                         results.append({"name": name, "status": "success", "piid": expected_piid_int, "original_piid": piid, "siid": siid})
                                     else:
                                         msg_m = response_message(r, str(r))
-                                        self.progress.emit(f"  ⚠️ {name} 修正失败: {msg_m}")
-                                        self.progress.emit(f"  ✅ {name} 成功 (piid={piid})")
-                                        success += 1
-                                        results.append({"name": name, "status": "success", "piid": piid, "modify_error": msg_m, "siid": siid})
+                                        self.progress.emit(f"  ❌ {name} PIID修正失败(已重试3次): {msg_m}")
+                                        failed += 1
+                                        results.append({"name": name, "status": "failed", "error": f"PIID修正失败: {msg_m}", "siid": siid})
+                                        self.progress.emit("\n⛔ PIID修正失败，停止创建")
+                                        break
                                 else:
                                     self.progress.emit(f"  ✅ {name} 成功 (piid={piid})")
                                     success += 1
@@ -359,17 +361,18 @@ class CreateAllWorker(QThread):
                                 expected_id_int = int(expected_id)
                                 if int(new_id) != expected_id_int:
                                     self.progress.emit(f"    🔧 {which_iid} {new_id}→{expected_id_int} 修正中...")
-                                    r = modify_iid(self.config, siid, new_id, expected_id_int, which_iid)
-                                    if is_success_response(r):
+                                    ok, r = modify_with_retry(modify_iid, self.config, siid, new_id, expected_id_int, which_iid, log_fn=self.progress.emit)
+                                    if ok:
                                         self.progress.emit(f"  ✅ [{type_label}] {name} 成功 ({id_field}={expected_id_int}, 已修正)")
                                         success += 1
                                         results.append({"type": type_label, "name": name, "status": "success", id_field: expected_id_int, "original_id": new_id, "siid": siid})
                                     else:
                                         msg_m = response_message(r, str(r))
-                                        self.progress.emit(f"  ⚠️ [{type_label}] {name} 修正失败: {msg_m}")
-                                        self.progress.emit(f"  ✅ [{type_label}] {name} 成功 ({id_field}={new_id})")
-                                        success += 1
-                                        results.append({"type": type_label, "name": name, "status": "success", id_field: new_id, "modify_error": msg_m, "siid": siid})
+                                        self.progress.emit(f"  ❌ [{type_label}] {name} {which_iid}修正失败(已重试3次): {msg_m}")
+                                        failed += 1
+                                        results.append({"type": type_label, "name": name, "status": "failed", "error": f"{which_iid}修正失败: {msg_m}", "siid": siid})
+                                        self.progress.emit("\n⛔ IID修正失败，停止创建")
+                                        break
                                 else:
                                     self.progress.emit(f"  ✅ [{type_label}] {name} 成功 ({id_field}={new_id})")
                                     success += 1
@@ -427,6 +430,7 @@ class SyncServiceWorker(QThread):
                 dry_run=self.dry_run,
                 log_fn=self.progress.emit,
                 cancelled_fn=lambda: self._cancel,
+                delay=self.delay,
             )
             results_path = os.path.join(os.path.expanduser("~"), "Desktop", "sync_results.json")
             with open(results_path, "w", encoding="utf-8") as f:

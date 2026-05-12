@@ -570,18 +570,20 @@ def _generate_blank_template(output_path: str):
     opt_desc_fill = PatternFill("solid", fgColor="E8F0FE")
 
     ws = wb.active; ws.title = "属性定义"
+    # 使用与 miot_common.PROPERTY_COLUMNS 一致的列定义（含 piid，列顺序一致）
     columns = [
-        ("name",             20, "属性英文名\n如 on、mode",                               True),
-        ("description",      20, "属性中文描述\n如 开关、模式",                            True),
-        ("format",           12, "数据格式\nbool/uint8/uint16/uint32/string",             True),
-        ("service_desc",     22, "服务中文名\n如「开关一键」",                              True),
-        ("value_list",       28, "枚举值\n格式: 0:关闭,1:开启",                            False),
-        ("value_range_min",  14, "数值范围-最小值",                                        False),
-        ("value_range_max",  14, "数值范围-最大值",                                        False),
-        ("value_range_step", 14, "数值范围-步长",                                          False),
-        ("siid",              8, "服务ID（备选）",                                         False),
-        ("access",           20, "访问权限\n默认: read,write,notify",                     False),
-        ("service_name",     20, "服务英文名（可选）",                                      False),
+        ("name",              20, "属性英文名\n如: on, mode, delay-time",          True),
+        ("description",       25, "属性中文描述\n如: 开关, 模式, 延时时间",          True),
+        ("format",            12, "数据格式\nbool/uint8/uint16/uint32\n/int8/int16/int32/float/string", True),
+        ("service_desc",      22, "服务中文描述（推荐）\n如: 开关一键、按键1点动毫秒数", True),
+        ("value_list",        35, "枚举值（仅enum类型）\n格式: 0:关闭,1:开启,2:待机",  False),
+        ("value_range_min",   14, "数值最小值\n（仅number类型）",                    False),
+        ("value_range_max",   14, "数值最大值\n（仅number类型）",                    False),
+        ("value_range_step",  14, "数值步长\n（仅number类型）",                     False),
+        ("service_name",      20, "服务英文名\n如: switch, jog-delay-time",         False),
+        ("siid",               8, "服务ID（备选）\n直接指定siid，填了则忽略service匹配", False),
+        ("access",            20, "访问权限\n默认: read,write,notify\n（gattAccess自动等同于access）", False),
+        ("piid",               8, "属性ID\n（导出时自动填入，创建后可校验修正）", False),
     ]
     for i, (col, width, desc, required) in enumerate(columns, 1):
         cl = chr(64 + i)
@@ -597,7 +599,7 @@ def _generate_blank_template(output_path: str):
         dc.border = thin_border
     ws.row_dimensions[1].height = 28
     ws.row_dimensions[2].height = 50
-    dv = DataValidation(type="list", formula1='"bool,uint8,uint16,uint32,string"', allow_blank=True)
+    dv = DataValidation(type="list", formula1='"bool,uint8,uint16,uint32,int8,int16,int32,float,string"', allow_blank=True)
     ws.add_data_validation(dv); dv.add("C3:C1000")
 
     ws2 = wb.create_sheet("公共配置")

@@ -37,7 +37,7 @@ from miot_common import (
     response_message,
     safe_int,
 )
-from miot_service_core import check_product_status, modify_iid
+from miot_service_core import check_product_status, modify_iid, modify_with_retry
 
 # 向后兼容：保留模块级 HEADERS
 HEADERS = dict(HEADERS)
@@ -551,7 +551,10 @@ def batch_create(tasks: list[dict], create_fn, config: dict,
     which_iid = IID_WHICH_MAP.get(id_field, "")
 
     print(f"\n🚀 开始创建 {len(tasks)} 条{label}...\n")
+    stop_flag = False
     for t in tasks:
+        if stop_flag:
+            break
         print(f"  [{t['index']}] {t['name']} ({t['desc']}) → siid={t['siid']} ... ", end="", flush=True)
         try:
             resp = create_fn(t["body"], config)
@@ -568,10 +571,12 @@ def batch_create(tasks: list[dict], create_fn, config: dict,
                         try:
                             expected_id_int = int(expected_id)
                             if int(new_id) != expected_id_int:
-                                print(f"\n    🔧 {which_iid} {new_id}→{expected_id_int} 修正中...", end="", flush=True)
-                                r = modify_iid(config, t["siid"], new_id, expected_id_int, which_iid)
-                                if is_success_response(r):
-                                    print(f" ✅ 修正成功")
+                                print(f"\n    🔧 {which_iid} {new_id}→{expected_id_int} 修正中...")
+                                ok, r = modify_with_retry(
+                                    modify_iid, config, t["siid"], new_id, expected_id_int, which_iid,
+                                    log_fn=lambda m: print(f"    {m}"))
+                                if ok:
+                                    print(f"    ✅ 修正成功")
                                     modified += 1
                                     modified_this = True
                                     result_entry["modified"] = True
@@ -579,8 +584,10 @@ def batch_create(tasks: list[dict], create_fn, config: dict,
                                     result_entry["expected_" + id_field] = expected_id_int
                                 else:
                                     msg = response_message(r, json.dumps(r, ensure_ascii=False))
-                                    print(f" ⚠️ 修正失败: {msg}")
+                                    print(f"    ❌ 修正失败(已重试3次): {msg}")
                                     result_entry["modify_error"] = msg
+                                    print("\n⛔ IID修正失败，停止创建")
+                                    stop_flag = True
                         except (ValueError, TypeError):
                             pass  # 非数字 ID 跳过修正
 

@@ -17,7 +17,7 @@ __all__ = [
     "get_services", "sync_services",
     "read_service_config_excel", "read_service_list_excel",
     "parse_service_str", "check_product_status",
-    "modify_iid",
+    "modify_iid", "modify_with_retry",
 ]
 
 from miot_common import (
@@ -226,6 +226,38 @@ def modify_iid(config: dict, service_id: int | str, old_iid: int, new_iid: int, 
     return parse_json_response(resp, f"修正 {which_iid} API")
 
 
+# ─── 带重试的 IID 修正 ────────────────────────────────────────
+
+def modify_with_retry(modify_fn, *args, log_fn=None, **kwargs):
+    """
+    包装 modify_siid / modify_iid，失败后自动重试：
+      第1次失败 → 等5秒重试
+      第2次失败 → 等10秒重试
+      第3次失败 → 返回 (False, last_response)
+
+    返回 (success: bool, response: dict)
+    """
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    last_resp = None
+    retry_delays = [5, 10]  # 第一次失败等5s，第二次失败等10s
+
+    for attempt in range(1 + len(retry_delays)):  # 最多3次尝试
+        resp = modify_fn(*args, **kwargs)
+        if is_success_response(resp):
+            return True, resp
+        last_resp = resp
+        if attempt < len(retry_delays):
+            delay = retry_delays[attempt]
+            msg_resp = response_message(resp, str(resp))
+            log(f"    ⚠️ 修正失败({msg_resp})，等待{delay}秒后重试...")
+            time.sleep(delay)
+
+    return False, last_resp
+
+
 # ─── 解析服务的 serviceStr ────────────────────────────────────
 
 def parse_service_str(svc: dict) -> dict:
@@ -278,6 +310,7 @@ def sync_services(
     config: dict,
     service_rows: list[dict],
     dry_run: bool = False,
+    delay: float = 0.0,
     log_fn=None,
     cancelled_fn=None,
 ) -> dict:
@@ -354,15 +387,19 @@ def sync_services(
                 log(f"[{row_num}/{total}] 🔧 {name} siid={actual_siid}→{expected_siid} 修正中...")
                 if not dry_run:
                     svc_id = existing[key].get("serviceId", actual_siid)
-                    r = modify_siid(config, svc_id, actual_siid, expected_siid)
-                    if is_success_response(r):
+                    ok, r = modify_with_retry(modify_siid, config, svc_id, actual_siid, expected_siid, log_fn=log)
+                    if ok:
                         log(f"    ✅ 修正成功")
                         fixed += 1
                         results.append({"name": name, "action": "fix", "siid": expected_siid})
+                        if delay > 0:
+                            time.sleep(delay)
                     else:
-                        log(f"    ❌ 修正失败: {r}")
+                        log(f"    ❌ 修正失败(已重试3次): {r}")
                         errors += 1
                         results.append({"name": name, "action": "fix_fail", "siid": actual_siid, "error": str(r)})
+                        log("\n⛔ 修正失败，停止创建")
+                        break
                 else:
                     log(f"    [干跑] 需要修正 siid {actual_siid} → {expected_siid}")
                     fixed += 1
@@ -380,19 +417,23 @@ def sync_services(
                         log(f"    siid={new_siid}，期望={expected_siid}，修正中...")
                         svc_data = r.get("data") or r.get("result")
                         svc_id = svc_data.get("serviceId") if isinstance(svc_data, dict) else new_siid
-                        fr = modify_siid(config, svc_id or new_siid, new_siid, expected_siid)
-                        if is_success_response(fr):
+                        ok_f, fr = modify_with_retry(modify_siid, config, svc_id or new_siid, new_siid, expected_siid, log_fn=log)
+                        if ok_f:
                             log(f"    ✅ 创建成功 siid={expected_siid} (修正自{new_siid})")
                             created += 1
                             results.append({"name": name, "action": "create_fix", "siid": expected_siid, "original_siid": new_siid})
                         else:
-                            log(f"    ⚠️ 创建成功 siid={new_siid}，修正到{expected_siid}失败")
-                            created += 1
+                            log(f"    ⚠️ 创建成功 siid={new_siid}，修正到{expected_siid}失败(已重试3次)")
+                            errors += 1
                             results.append({"name": name, "action": "create_fix_fail", "siid": new_siid, "expected_siid": expected_siid})
+                            log("\n⛔ siid修正失败，停止创建")
+                            break
                     else:
                         log(f"    ✅ 创建成功 siid={new_siid}")
                         created += 1
                         results.append({"name": name, "action": "create", "siid": new_siid})
+                    if delay > 0:
+                        time.sleep(delay)
                 else:
                     log(f"    ❌ 创建失败: {r}")
                     errors += 1
