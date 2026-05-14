@@ -190,11 +190,44 @@ class MIoTMainWindow(QMainWindow):
         menu.exec(pos)
 
     def _on_ent_refresh(self):
-        """刷新企业列表"""
+        """刷新企业列表，并同步服务端当前企业"""
         if not self._current_user:
             return
         self.statusBar().showMessage("正在刷新企业列表...", 2000)
         self._refresh_ent_combo()
+
+        # 检查服务端当前企业是否和本地一致
+        try:
+            server_ent = get_curr_enterprise(
+                self._current_user.get("userId", ""),
+                self._current_user.get("xiaomiiot_ph", ""),
+                self._current_user.get("serviceToken", ""),
+            )
+            server_gid = str(server_ent.get("groupId", ""))
+            local_gid = str(self._current_user.get("groupId", ""))
+            if server_gid and server_gid != local_gid:
+                # 服务端当前企业和本地不同，同步切换
+                self._current_user["groupId"] = server_gid
+                self._current_user["groupName"] = server_ent.get("compName", "")
+                update_user_group(
+                    self._current_user.get("userId", ""), server_gid)
+                # 选中对应企业
+                self._ent_loading = True
+                for i in range(self.ent_combo.count()):
+                    ent = self.ent_combo.itemData(i)
+                    if (ent and isinstance(ent, dict)
+                            and str(ent.get("groupId", "")) == server_gid):
+                        self.ent_combo.setCurrentIndex(i)
+                        break
+                self._ent_loading = False
+                self._fill_cookies()
+                self.statusBar().showMessage(
+                    f"✅ 企业列表已刷新，已切换到 {server_ent.get('shortName', server_gid)}",
+                    5000)
+                return
+        except Exception:
+            pass
+
         self.statusBar().showMessage("✅ 企业列表已刷新", 3000)
 
     def _on_ent_combo_changed(self, index):
