@@ -120,7 +120,17 @@ class MIoTMainWindow(QMainWindow):
         user_row.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         user_row.setSpacing(8)
 
-        # 企业下拉（左侧）
+        # 企业刷新按钮（最左侧）
+        self.ent_refresh_btn = QPushButton("🔄")
+        self.ent_refresh_btn.setObjectName("entRefreshBtn")
+        self.ent_refresh_btn.setFixedSize(32, 32)
+        self.ent_refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.ent_refresh_btn.setToolTip("刷新企业列表")
+        self.ent_refresh_btn.setVisible(False)  # 登录后才显示
+        self.ent_refresh_btn.clicked.connect(self._on_ent_refresh)
+        user_row.addWidget(self.ent_refresh_btn)
+
+        # 企业下拉
         self.ent_combo = EnterpriseComboBox()
         self.ent_combo.setObjectName("entCombo")
         self.ent_combo.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -178,6 +188,14 @@ class MIoTMainWindow(QMainWindow):
         # 在按钮下方弹出
         pos = self.user_btn.mapToGlobal(self.user_btn.rect().bottomLeft())
         menu.exec(pos)
+
+    def _on_ent_refresh(self):
+        """刷新企业列表"""
+        if not self._current_user:
+            return
+        self.statusBar().showMessage("正在刷新企业列表...", 2000)
+        self._refresh_ent_combo()
+        self.statusBar().showMessage("✅ 企业列表已刷新", 3000)
 
     def _on_ent_combo_changed(self, index):
         """企业下拉切换"""
@@ -269,6 +287,7 @@ class MIoTMainWindow(QMainWindow):
         if self._current_user:
             self.ent_combo.setVisible(True)
             self.ent_combo.setEnabled(True)
+            self.ent_refresh_btn.setVisible(True)
             uid = str(self._current_user.get("userId", ""))
             name = self._current_user.get("name", uid)
             self.user_btn.setText(f"👤 {name}")
@@ -282,6 +301,7 @@ class MIoTMainWindow(QMainWindow):
         else:
             self.ent_combo.setVisible(False)
             self.ent_combo.clear()
+            self.ent_refresh_btn.setVisible(False)
             self.user_btn.setText("🔑 点击登录")
             self.user_btn.setProperty("loggedIn", "false")
             self.statusBar().showMessage("未登录", 3000)
@@ -406,26 +426,53 @@ class MIoTMainWindow(QMainWindow):
                     edit.clear()
 
     def _check_saved_login(self):
-        """检查是否有已保存的登录信息"""
+        """检查是否有已保存的登录信息，并验证 token 是否有效"""
         user = get_current_user()
-        if user:
+        if not user:
+            return
+
+        # 验证 token 是否仍然有效（调用企业列表 API）
+        try:
+            enterprises = get_enterprise_list(
+                user.get("userId", ""),
+                user.get("xiaomiiot_ph", ""),
+                user.get("serviceToken", ""),
+            )
+        except Exception:
+            enterprises = None
+
+        if enterprises is None:
+            # API 请求异常（网络问题等），不做判定，按本地状态登录
             self._current_user = user
-            # 如果本地没有 groupId，尝试从 API 获取
-            if not user.get("groupId"):
-                try:
-                    ent = get_curr_enterprise(
-                        user.get("userId", ""),
-                        user.get("xiaomiiot_ph", ""),
-                        user.get("serviceToken", ""),
-                    )
-                    if ent.get("groupId"):
-                        user["groupId"] = ent["groupId"]
-                        user["groupName"] = ent.get("compName", "")
-                        update_user_group(user.get("userId", ""), ent["groupId"])
-                except Exception:
-                    pass
+        elif not enterprises:
+            # API 返回空列表 → token 大概率已过期，清除登录状态
+            logout_current()
+            self._current_user = None
             self._update_user_ui()
-            self._fill_cookies()
+            QMessageBox.information(
+                self, "登录已过期",
+                "检测到您的登录信息已过期，请重新登录。"
+            )
+            return
+        else:
+            self._current_user = user
+
+        # 如果本地没有 groupId，尝试从 API 获取
+        if not user.get("groupId"):
+            try:
+                ent = get_curr_enterprise(
+                    user.get("userId", ""),
+                    user.get("xiaomiiot_ph", ""),
+                    user.get("serviceToken", ""),
+                )
+                if ent.get("groupId"):
+                    user["groupId"] = ent["groupId"]
+                    user["groupName"] = ent.get("compName", "")
+                    update_user_group(user.get("userId", ""), ent["groupId"])
+            except Exception:
+                pass
+        self._update_user_ui()
+        self._fill_cookies()
 
 
 # ─── Entry ────────────────────────────────────────────────────
