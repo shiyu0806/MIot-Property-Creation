@@ -25,15 +25,17 @@ from miot_create_properties import (
     validate_tasks,
 )
 from miot_service_core import check_product_status
-from miot_common import TEMPLATE_VERSION
 from miot_gui_common import (
     _make_log_panel,
     _make_progress,
+    _make_left_panel,
     _inject_group_id,
     _cookie_group,
+    _polish_group,
 )
 from miot_gui_workers import ExportPropWorker, CreateAllWorker
 from miot_reports import write_dry_run_plan, default_desktop_path
+from miot_auth import get_current_user
 
 
 class ExportPropTab(QWidget):
@@ -44,22 +46,24 @@ class ExportPropTab(QWidget):
 
     def _build(self):
         layout = QHBoxLayout(self)
-        left = QWidget(); left.setFixedWidth(460)
-        lv = QVBoxLayout(left)
+        left, _, lv = _make_left_panel()
 
         # 产品信息
         grp_prod = QGroupBox("产品信息")
         form = QFormLayout()
         self.pid = QLineEdit(); self.pid.setPlaceholderText("如 33257")
         self.model = QLineEdit(); self.model.setPlaceholderText("如 uwize.switch.yzw07")
-        self.userid = QLineEdit(); self.userid.setPlaceholderText("如 1097752639")
+        # userId 隐藏字段，自动从登录账号获取
+        cur = get_current_user()
+        self.userid = QLineEdit()
+        self.userid.setText(str(cur.get("userId", "")) if cur else "")
+        self.userid.setVisible(False)
         self.connect_type = QSpinBox()
         self.connect_type.setRange(0, 99); self.connect_type.setValue(16)
         form.addRow("产品ID (pdId):", self.pid)
         form.addRow("产品型号 (model):", self.model)
-        form.addRow("用户ID (userId):", self.userid)
         form.addRow("连接类型:", self.connect_type)
-        grp_prod.setLayout(form)
+        _polish_group(grp_prod, form)
         lv.addWidget(grp_prod)
 
         _, self.token, self.ph, _ = _cookie_group(lv, "exp_prop", show_userid=False)
@@ -75,7 +79,7 @@ class ExportPropTab(QWidget):
         form2.addRow("导出文件夹:", row)
         self.chk_json = QCheckBox("同时保存原始 JSON")
         form2.addRow("", self.chk_json)
-        grp_out.setLayout(form2)
+        _polish_group(grp_out, form2)
         lv.addWidget(grp_out)
 
         btn_row = QHBoxLayout()
@@ -106,8 +110,11 @@ class ExportPropTab(QWidget):
         token = self.token.text().strip()
         ph = self.ph.text().strip()
         userid = self.userid.text().strip()
-        if not all([pid, model, token, ph, userid]):
+        if not all([pid, model, token, ph]):
             QMessageBox.warning(self, "提示", "请填写产品信息和 Cookie")
+            return
+        if not userid:
+            QMessageBox.warning(self, "提示", "未检测到登录账号，请先登录")
             return
 
         # 自动生成输出路径
@@ -164,8 +171,7 @@ class CreatePropTab(QWidget):
 
     def _build(self):
         layout = QHBoxLayout(self)
-        left = QWidget(); left.setFixedWidth(460)
-        lv = QVBoxLayout(left)
+        left, _, lv = _make_left_panel()
 
         grp_file = QGroupBox("Excel 文件")
         fv = QHBoxLayout()
@@ -173,7 +179,7 @@ class CreatePropTab(QWidget):
         btn_br = QPushButton("选择文件")
         btn_br.clicked.connect(self._browse_file)
         fv.addWidget(self.file_edit); fv.addWidget(btn_br)
-        grp_file.setLayout(fv)
+        _polish_group(grp_file, fv)
         lv.addWidget(grp_file)
 
         grp_ov = QGroupBox("产品信息（可覆盖 Excel 配置）")
@@ -182,7 +188,7 @@ class CreatePropTab(QWidget):
         self.model_ov = QLineEdit(); self.model_ov.setPlaceholderText("留空使用 Excel 配置")
         form_ov.addRow("产品ID (pdId):", self.pid_ov)
         form_ov.addRow("产品型号 (model):", self.model_ov)
-        grp_ov.setLayout(form_ov)
+        _polish_group(grp_ov, form_ov)
         lv.addWidget(grp_ov)
 
         _, self.token_ov, self.ph_ov, self.uid_ov = _cookie_group(lv, "crt_prop")
@@ -200,7 +206,7 @@ class CreatePropTab(QWidget):
         self.siid_spin.setSpecialValueText("全部")
         form_opts.addRow("请求间隔:", self.delay_spin)
         form_opts.addRow("指定 siid:", self.siid_spin)
-        grp_opts.setLayout(form_opts)
+        _polish_group(grp_opts, form_opts)
         lv.addWidget(grp_opts)
 
         btn_row1 = QHBoxLayout()
@@ -213,7 +219,7 @@ class CreatePropTab(QWidget):
 
         btn_row2 = QHBoxLayout()
         self.btn_create = QPushButton("🚀 开始创建")
-        self.btn_create.setObjectName("dangerBtn")
+        self.btn_create.setObjectName("successBtn")
         self.btn_create.clicked.connect(self._start_create)
         self.btn_cancel = QPushButton("取消")
         self.btn_cancel.clicked.connect(self._cancel)
@@ -510,142 +516,3 @@ class CreatePropTab(QWidget):
             b.setEnabled(not running)
         self.btn_cancel.setEnabled(running)
         self.progress.setVisible(running)
-
-
-# ─── Tab: 生成模板 ────────────────────────────────────────────
-
-class TemplatePropTab(QWidget):
-    def __init__(self):
-        super().__init__()
-        self._build()
-
-    def _build(self):
-        layout = QVBoxLayout(self)
-        grp = QGroupBox("生成空白属性 Excel 模板")
-        form = QFormLayout()
-        self.out_edit = QLineEdit("MIoT_属性创建模板.xlsx")
-        btn_br = QPushButton("浏览...")
-        btn_br.clicked.connect(self._browse)
-        row = QHBoxLayout(); row.addWidget(self.out_edit); row.addWidget(btn_br)
-        form.addRow("输出路径:", row)
-        btn_gen = QPushButton("📄 生成模板")
-        btn_gen.setObjectName("successBtn")
-        btn_gen.clicked.connect(self._gen)
-        form.addRow("", btn_gen)
-        grp.setLayout(form)
-        layout.addWidget(grp)
-        layout.addStretch()
-
-    def _browse(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self, "选择输出路径", "MIoT_属性创建模板.xlsx", "Excel (*.xlsx)")
-        if path:
-            self.out_edit.setText(path)
-
-    def _gen(self):
-        path = self.out_edit.text().strip()
-        if not path:
-            QMessageBox.warning(self, "提示", "请填写输出路径"); return
-        try:
-            _generate_blank_template(path)
-            QMessageBox.information(self, "成功", f"模板已生成:\n{path}")
-        except Exception as e:
-            QMessageBox.critical(self, "失败", str(e))
-
-
-def _generate_blank_template(output_path: str):
-    from openpyxl import Workbook
-    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-    from openpyxl.worksheet.datavalidation import DataValidation
-
-    wb = Workbook()
-    header_font   = Font(name="Arial", bold=True, color="FFFFFF", size=11)
-    header_fill   = PatternFill("solid", fgColor="4472C4")
-    opt_fill      = PatternFill("solid", fgColor="8DB4E2")
-    header_align  = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    thin_border   = Border(left=Side(style="thin"), right=Side(style="thin"),
-                           top=Side(style="thin"),  bottom=Side(style="thin"))
-    desc_font     = Font(name="Arial", size=9, color="666666")
-    desc_fill     = PatternFill("solid", fgColor="D9E2F3")
-    opt_desc_fill = PatternFill("solid", fgColor="E8F0FE")
-
-    ws = wb.active; ws.title = "属性定义"
-    # 使用与 miot_common.PROPERTY_COLUMNS 一致的列定义（含 piid，列顺序一致）
-    columns = [
-        ("name",              20, "属性英文名\n如: on, mode, delay-time",          True),
-        ("description",       25, "属性中文描述\n如: 开关, 模式, 延时时间",          True),
-        ("format",            12, "数据格式\nbool/uint8/uint16/uint32\n/int8/int16/int32/float/string", True),
-        ("service_desc",      22, "服务中文描述（推荐）\n如: 开关一键、按键1点动毫秒数", True),
-        ("value_list",        35, "枚举值（仅enum类型）\n格式: 0:关闭,1:开启,2:待机",  False),
-        ("value_range_min",   14, "数值最小值\n（仅number类型）",                    False),
-        ("value_range_max",   14, "数值最大值\n（仅number类型）",                    False),
-        ("value_range_step",  14, "数值步长\n（仅number类型）",                     False),
-        ("service_name",      20, "服务英文名\n如: switch, jog-delay-time",         False),
-        ("siid",               8, "服务ID（备选）\n直接指定siid，填了则忽略service匹配", False),
-        ("access",            20, "访问权限\n默认: read,write,notify\n（gattAccess自动等同于access）", False),
-        ("piid",               8, "属性ID\n（导出时自动填入，创建后可校验修正）", False),
-    ]
-    for i, (col, width, desc, required) in enumerate(columns, 1):
-        cl = chr(64 + i)
-        ws.column_dimensions[cl].width = width
-        cell = ws.cell(row=1, column=i, value=col)
-        cell.font = header_font
-        cell.fill = header_fill if required else opt_fill
-        cell.alignment = header_align; cell.border = thin_border
-        dc = ws.cell(row=2, column=i, value=desc)
-        dc.font = desc_font
-        dc.fill = desc_fill if required else opt_desc_fill
-        dc.alignment = Alignment(vertical="center", wrap_text=True)
-        dc.border = thin_border
-    ws.row_dimensions[1].height = 28
-    ws.row_dimensions[2].height = 50
-    dv = DataValidation(type="list", formula1='"bool,uint8,uint16,uint32,int8,int16,int32,float,string"', allow_blank=True)
-    ws.add_data_validation(dv); dv.add("C3:C1000")
-
-    ws2 = wb.create_sheet("公共配置")
-    ws2.column_dimensions["A"].width = 22
-    ws2.column_dimensions["B"].width = 65
-    ws2.column_dimensions["C"].width = 40
-    config_items = [
-        ("template_version", TEMPLATE_VERSION, "模板版本（自动生成，请勿修改）", False),
-        ("userId",       "", "小米账号用户ID（必填）",                    True),
-        ("pdId",         "", "产品ID（必填）",                            True),
-        ("model",        "", "设备型号（必填）",                           True),
-        ("serviceToken", "", "浏览器 Cookie 获取（必填）",                 True),
-        ("xiaomiiot_ph", "", "浏览器 Cookie 获取（必填）",                 True),
-        ("connectType",  "16", "连接类型（默认16）",                       False),
-        ("language",     "zh_cn", "语言（默认zh_cn）",                    False),
-        ("version",      "1", "版本（默认1）",                            False),
-        ("status",       "0", "状态（默认0）",                            False),
-        ("source",       "4", "来源（默认4）",                            False),
-        ("standard",     "false", "标准属性（默认false）",                 False),
-        ("access",       "read,write,notify", "默认访问权限",              False),
-    ]
-    for i, (k, v, d, req) in enumerate(config_items, 1):
-        kc = ws2.cell(row=i, column=1, value=k)
-        ws2.cell(row=i, column=2, value=v)
-        dc = ws2.cell(row=i, column=3, value=d)
-        if req:
-            kc.font = Font(name="Arial", bold=True, color="CC0000")
-        dc.font = desc_font
-
-    ws3 = wb.create_sheet("填写说明")
-    ws3.column_dimensions["A"].width = 20
-    ws3.column_dimensions["B"].width = 80
-    instructions = [
-        ("必填列", "name / description / format / service_desc"),
-        ("枚举属性", "value_list 列填写格式: 0:关闭,1:开启,2:待机"),
-        ("数值属性", "value_range_min / max / step 三列"),
-        ("bool 属性", "format 填 bool，value_list 和 value_range 都留空"),
-        ("服务匹配", "优先用 service_desc（服务中文名）匹配"),
-        ("siid 列", "可选，填了则忽略 service 匹配"),
-        ("access 列", "可选，默认 read,write,notify"),
-    ]
-    ws3.cell(row=1, column=1, value="项目").font = Font(bold=True, size=12)
-    ws3.cell(row=1, column=2, value="说明").font = Font(bold=True, size=12)
-    for i, (item, desc) in enumerate(instructions, 2):
-        ws3.cell(row=i, column=1, value=item).font = Font(bold=True)
-        ws3.cell(row=i, column=2, value=desc)
-
-    wb.save(output_path)
-

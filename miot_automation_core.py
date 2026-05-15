@@ -813,31 +813,35 @@ def read_automation_excel(path: str) -> tuple:
     Sheet3: 触发条件(if)  （可选，旧格式可能只有 Sheet2）
     返回 (config_dict, automation_list)
     """
-    import pandas as pd
+    import openpyxl
 
-    # 读取配置
-    df_config = pd.read_excel(path, sheet_name=0, dtype=str)
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    sheet_names = wb.sheetnames
+
+    # 读取配置（Sheet 0）
+    ws0 = wb.worksheets[0]
     config = {}
-    for _, row in df_config.iterrows():
-        key = str(row.iloc[0]).strip()
-        val = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
-        config[key] = val
-
-    # 读取所有 Sheet 名称
-    xl = pd.ExcelFile(path)
-    sheet_names = xl.sheet_names
+    for row in ws0.iter_rows(min_row=2, values_only=True):
+        if len(row) >= 2 and row[0] is not None:
+            key = str(row[0]).strip()
+            val = str(row[1]).strip() if row[1] is not None else ""
+            config[key] = val
 
     auto_items = []
 
     def _parse_sheet(sheet_name, tr_type):
         """解析单个 Sheet 的自动化数据"""
-        df = pd.read_excel(path, sheet_name=sheet_name, dtype=str)
+        ws = wb[sheet_name]
+        all_rows = list(ws.iter_rows(values_only=True))
+        if not all_rows:
+            return []
+        headers = [str(h).strip() if h is not None else "" for h in all_rows[0]]
         items = []
-        for _, row in df.iterrows():
+        for row in all_rows[1:]:
             item = {}
-            for col in df.columns:
-                val = row[col]
-                item[col] = str(val) if pd.notna(val) else ""
+            for i, col in enumerate(headers):
+                val = row[i] if i < len(row) else None
+                item[col] = str(val) if val is not None else ""
             # 数值字段转 int
             for int_key in ["siId", "subIid", "platform", "appValueStyle", "autoType",
                            "pdId", "trId", "saId", "scId", "gid", "rank", "ruleId"]:
@@ -880,58 +884,55 @@ def read_automation_excel(path: str) -> tuple:
     else:
         # 旧格式：Sheet2 统一读取，根据 specRelate 推断类型
         if len(sheet_names) >= 2:
-            df_auto = pd.read_excel(path, sheet_name=1, dtype=str)
-            for _, row in df_auto.iterrows():
-                item = {}
-                for col in df_auto.columns:
-                    val = row[col]
-                    item[col] = str(val) if pd.notna(val) else ""
-                # 数值字段转 int
-                for int_key in ["siId", "subIid", "platform", "appValueStyle", "autoType",
-                               "pdId", "trId", "saId", "scId", "gid", "rank", "ruleId"]:
-                    if int_key in item and item[int_key].isdigit():
-                        item[int_key] = int(item[int_key])
-                # actionList: 如果是 JSON 字符串则解析
-                if "actionList" in item and item["actionList"]:
-                    try:
-                        item["actionList"] = json.loads(item["actionList"])
-                    except Exception:
-                        pass
-                # groupSceneDto: 如果是 JSON 字符串则解析
-                if "groupSceneDto" in item and item["groupSceneDto"]:
-                    try:
-                        item["groupSceneDto"] = json.loads(item["groupSceneDto"])
-                    except Exception:
-                        pass
-                # 推断 _trType
-                # trId 是最可靠的判断依据：
-                #   201 → then（执行动作）
-                #   101 → if（事件触发）
-                #   102 → if（属性变化触发）
-                # 如果没有 trId，用 specRelate + key 推断
-                tr_id = item.get("trId")
-                spec_relate = item.get("specRelate", "")
-                spec_type = item.get("specType", "")
-                key = item.get("key", "")
-                if tr_id:
-                    if str(tr_id) == "201":
-                        item["_trType"] = "then"
-                    elif str(tr_id) in ("101", "102"):
+            ws_auto = wb.worksheets[1]
+            auto_rows = list(ws_auto.iter_rows(values_only=True))
+            if auto_rows:
+                auto_headers = [str(h).strip() if h is not None else "" for h in auto_rows[0]]
+                for row in auto_rows[1:]:
+                    item = {}
+                    for i, col in enumerate(auto_headers):
+                        val = row[i] if i < len(row) else None
+                        item[col] = str(val) if val is not None else ""
+                    # 数值字段转 int
+                    for int_key in ["siId", "subIid", "platform", "appValueStyle", "autoType",
+                                   "pdId", "trId", "saId", "scId", "gid", "rank", "ruleId"]:
+                        if int_key in item and item[int_key].isdigit():
+                            item[int_key] = int(item[int_key])
+                    # actionList: 如果是 JSON 字符串则解析
+                    if "actionList" in item and item["actionList"]:
+                        try:
+                            item["actionList"] = json.loads(item["actionList"])
+                        except Exception:
+                            pass
+                    # groupSceneDto: 如果是 JSON 字符串则解析
+                    if "groupSceneDto" in item and item["groupSceneDto"]:
+                        try:
+                            item["groupSceneDto"] = json.loads(item["groupSceneDto"])
+                        except Exception:
+                            pass
+                    # 推断 _trType
+                    tr_id = item.get("trId")
+                    spec_relate = item.get("specRelate", "")
+                    spec_type = item.get("specType", "")
+                    key = item.get("key", "")
+                    if tr_id:
+                        if str(tr_id) == "201":
+                            item["_trType"] = "then"
+                        elif str(tr_id) in ("101", "102"):
+                            item["_trType"] = "if"
+                        else:
+                            item["_trType"] = "then"
+                    elif key and key.startswith("prop."):
+                        item["_trType"] = "if"
+                    elif key and key.startswith("event."):
+                        item["_trType"] = "if"
+                    elif spec_type == "event" or (not spec_type and spec_relate.startswith("event")):
                         item["_trType"] = "if"
                     else:
-                        item["_trType"] = "then"
-                elif key and key.startswith("prop."):
-                    # key=prop.* 是属性变化触发，属于 if
-                    item["_trType"] = "if"
-                elif key and key.startswith("event."):
-                    # key=event.* 是事件触发，属于 if
-                    item["_trType"] = "if"
-                elif spec_type == "event" or (not spec_type and spec_relate.startswith("event")):
-                    item["_trType"] = "if"
-                else:
-                    item["_trType"] = "then"  # 默认
-                auto_items.append(item)
+                        item["_trType"] = "then"  # 默认
+                    auto_items.append(item)
 
+    wb.close()
     return config, auto_items
 
 
@@ -942,18 +943,7 @@ def write_automation_export_excel(path: str, config: dict, auto_list: list):
     Sheet2: 执行动作 (then)  — 聚合选值的 actionList 序列化为 JSON 字符串
     Sheet3: 触发条件 (if)
     """
-    import pandas as pd
-
-    # Sheet1: 配置
-    config_rows = [
-        {"参数名": k, "值": v}
-        for k, v in [("userId", config.get("userId", "")),
-                      ("xiaomiiot_ph", config.get("xiaomiiot_ph", "")),
-                      ("serviceToken", config.get("serviceToken", "")),
-                      ("pdId", config.get("pdId", "")),
-                      ("model", config.get("model", ""))]
-    ]
-    df_config = pd.DataFrame(config_rows)
+    import openpyxl
 
     # 分离 then 和 if
     then_list = [item for item in auto_list if item.get("_trType") == "then"]
@@ -1023,13 +1013,32 @@ def write_automation_export_excel(path: str, config: dict, auto_list: list):
     then_rows, then_cols = _build_rows(then_list, then_keys)
     if_rows, if_cols = _build_rows(if_list, if_keys)
 
-    with pd.ExcelWriter(path, engine="openpyxl") as writer:
-        df_config.to_excel(writer, sheet_name="产品配置", index=False)
-        if then_rows:
-            pd.DataFrame(then_rows, columns=then_cols).to_excel(
-                writer, sheet_name="执行动作(then)", index=False)
-        if if_rows:
-            pd.DataFrame(if_rows, columns=if_cols).to_excel(
-                writer, sheet_name="触发条件(if)", index=False)
+    wb_out = openpyxl.Workbook()
 
+    # Sheet1: 配置
+    ws_cfg = wb_out.active
+    ws_cfg.title = "产品配置"
+    ws_cfg.append(["参数名", "值"])
+    for k, v in [("userId", config.get("userId", "")),
+                 ("xiaomiiot_ph", config.get("xiaomiiot_ph", "")),
+                 ("serviceToken", config.get("serviceToken", "")),
+                 ("pdId", config.get("pdId", "")),
+                 ("model", config.get("model", ""))]:
+        ws_cfg.append([k, v])
+
+    # Sheet2: 执行动作
+    if then_rows:
+        ws_then = wb_out.create_sheet("执行动作(then)")
+        ws_then.append(then_cols)
+        for row in then_rows:
+            ws_then.append([row.get(c, "") for c in then_cols])
+
+    # Sheet3: 触发条件
+    if if_rows:
+        ws_if = wb_out.create_sheet("触发条件(if)")
+        ws_if.append(if_cols)
+        for row in if_rows:
+            ws_if.append([row.get(c, "") for c in if_cols])
+
+    wb_out.save(path)
     return path

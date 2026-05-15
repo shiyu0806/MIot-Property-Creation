@@ -522,21 +522,13 @@ class ExportServiceWorker(QThread):
 
     def run(self):
         try:
-            import pandas as pd
+            import openpyxl
             self.progress.emit(f"正在获取 {self.config.get('model')} 的服务列表...")
             services = get_services(self.config)
             self.progress.emit(f"✅ 获取到 {len(services)} 个服务")
 
-            config_rows = [
-                {"参数名": "userId",       "值": self.config.get("userId", "")},
-                {"参数名": "xiaomiiot_ph", "值": self.config.get("xiaomiiot_ph", "")},
-                {"参数名": "serviceToken", "值": self.config.get("serviceToken", "")},
-                {"参数名": "pdId",         "值": self.config.get("pdId", "")},
-                {"参数名": "model",        "值": self.config.get("model", "")},
-            ]
-            df_config = pd.DataFrame(config_rows)
-
             svc_rows = []
+            svc_headers = ["服务ID", "服务名称", "服务描述", "标准化描述", "是否标准服务"]
             prop_rows = []
             for svc in services:
                 siid  = svc.get("siid", "")
@@ -585,12 +577,40 @@ class ExportServiceWorker(QThread):
                         f"事件:{len(parsed['events'])} 动作:{len(parsed['actions'])}"
                     )
 
-            df_svc = pd.DataFrame(svc_rows)
-            with pd.ExcelWriter(self.output_path, engine="openpyxl") as writer:
-                df_config.to_excel(writer, index=False, sheet_name="产品配置")
-                df_svc.to_excel(writer, index=False, sheet_name="服务列表")
-                if self.export_props and prop_rows:
-                    pd.DataFrame(prop_rows).to_excel(writer, index=False, sheet_name="属性详情")
+            # 用 openpyxl 直接写 Excel（无需 pandas）
+            wb = openpyxl.Workbook()
+
+            # Sheet 1: 产品配置
+            ws_config = wb.active
+            ws_config.title = "产品配置"
+            config_headers = ["参数名", "值"]
+            ws_config.append(config_headers)
+            for row in [
+                ("userId",       self.config.get("userId", "")),
+                ("xiaomiiot_ph", self.config.get("xiaomiiot_ph", "")),
+                ("serviceToken", self.config.get("serviceToken", "")),
+                ("pdId",         self.config.get("pdId", "")),
+                ("model",        self.config.get("model", "")),
+            ]:
+                ws_config.append(list(row))
+
+            # Sheet 2: 服务列表
+            ws_svc = wb.create_sheet("服务列表")
+            ws_svc.append(svc_headers)
+            for row in svc_rows:
+                ws_svc.append([row.get(h, "") for h in svc_headers])
+
+            # Sheet 3: 属性详情（可选）
+            if self.export_props and prop_rows:
+                prop_headers = ["siid", "服务名称", "piid", "类型",
+                                "属性名称", "描述", "格式", "访问权限",
+                                "值列表", "值范围"]
+                ws_prop = wb.create_sheet("属性详情")
+                ws_prop.append(prop_headers)
+                for row in prop_rows:
+                    ws_prop.append([row.get(h, "") for h in prop_headers])
+
+            wb.save(self.output_path)
 
             self.finished_ok.emit(self.output_path)
         except Exception:

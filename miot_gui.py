@@ -3,7 +3,7 @@
 MIoT 平台工具（整合版）
 功能：
   服务层：创建服务 / 导出服务
-  属性层：导出模板 / 创建属性 / 生成模板
+  属性层：导出模板 / 创建属性
 """
 
 import sys
@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
     QComboBox, QMenu,
 )
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QFont
 
 # ── 登录模块
 from miot_auth import (
@@ -32,7 +33,7 @@ from miot_gui_auth_ui import LoginDialog, EnterpriseComboBox
 # ─── Tab 模块 ─────────────────────────────────────────────────
 
 from miot_gui_service_tabs import CreateServiceTab, ExportServiceTab
-from miot_gui_property_tabs import ExportPropTab, CreatePropTab, TemplatePropTab
+from miot_gui_property_tabs import ExportPropTab, CreatePropTab
 from miot_gui_automation_tabs import ExportAutomationTab, CreateAutomationTab
 
 
@@ -42,8 +43,8 @@ class MIoTMainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("MIoT 平台工具")
-        self.setMinimumSize(1020, 820)
-        self.resize(1060, 860)
+        self.setMinimumSize(1024, 700)
+        self.resize(1280, 800)
         self._current_user = None
         self._ent_loading = False
         self._init_ui()
@@ -52,38 +53,56 @@ class MIoTMainWindow(QMainWindow):
 
     def _init_ui(self):
         central = QWidget()
+        central.setObjectName("appRoot")
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
-        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
         # ── 标题行 + 用户区域
-        header = QHBoxLayout()
+        header_widget = QWidget()
+        header_widget.setObjectName("appHeader")
+        header_widget.setFixedHeight(72)
+        header = QHBoxLayout(header_widget)
+        header.setContentsMargins(24, 16, 24, 16)
+        header.setSpacing(14)
 
-        title = QLabel("🔧 MIoT 平台工具")
+        brand_icon = QLabel("🔧")
+        brand_icon.setObjectName("brandIcon")
+        brand_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        brand_icon.setFixedSize(40, 40)
+
+        title = QLabel("MIoT 平台工具")
         title.setObjectName("titleLabel")
         subtitle = QLabel("小米 IoT 平台  —  服务层管理 & 属性层管理 & 自定义自动化（整合版）")
         subtitle.setObjectName("subtitleLabel")
 
         header_left = QVBoxLayout()
+        header_left.setContentsMargins(0, 0, 0, 0)
         header_left.addWidget(title)
         header_left.addWidget(subtitle)
         header_left.setSpacing(2)
+        header.addWidget(brand_icon)
         header.addLayout(header_left, 1)
 
         # 右上角用户区域
         self._build_user_area(header)
 
-        layout.addLayout(header)
+        layout.addWidget(header_widget)
 
         # 外层 Tabs：服务层 / 属性层
         self.outer_tabs = QTabWidget()
+        self.outer_tabs.setObjectName("outerTabs")
+        self.outer_tabs.setDocumentMode(True)
         layout.addWidget(self.outer_tabs)
 
         # ── 服务层
         svc_widget = QWidget()
         svc_layout = QVBoxLayout(svc_widget)
-        svc_layout.setContentsMargins(0, 0, 0, 0)
+        svc_layout.setContentsMargins(20, 20, 20, 20)
         svc_inner = QTabWidget()
+        svc_inner.setObjectName("innerTabs")
+        svc_inner.setDocumentMode(True)
         svc_inner.addTab(ExportServiceTab(), "📤 导出服务")
         svc_inner.addTab(CreateServiceTab(), "📋 创建服务")
         svc_layout.addWidget(svc_inner)
@@ -92,19 +111,22 @@ class MIoTMainWindow(QMainWindow):
         # ── 属性层
         prop_widget = QWidget()
         prop_layout = QVBoxLayout(prop_widget)
-        prop_layout.setContentsMargins(0, 0, 0, 0)
+        prop_layout.setContentsMargins(20, 20, 20, 20)
         prop_inner = QTabWidget()
+        prop_inner.setObjectName("innerTabs")
+        prop_inner.setDocumentMode(True)
         prop_inner.addTab(ExportPropTab(),   "📤 导出模板")
         prop_inner.addTab(CreatePropTab(),   "📥 创建属性")
-        prop_inner.addTab(TemplatePropTab(), "📄 生成模板")
         prop_layout.addWidget(prop_inner)
         self.outer_tabs.addTab(prop_widget, "⚙️ 属性层")
 
         # ── 自动化
         auto_widget = QWidget()
         auto_layout = QVBoxLayout(auto_widget)
-        auto_layout.setContentsMargins(0, 0, 0, 0)
+        auto_layout.setContentsMargins(20, 20, 20, 20)
         auto_inner = QTabWidget()
+        auto_inner.setObjectName("innerTabs")
+        auto_inner.setDocumentMode(True)
         auto_inner.addTab(ExportAutomationTab(), "📤 导出自动化")
         auto_inner.addTab(CreateAutomationTab(), "📥 创建自动化")
         auto_layout.addWidget(auto_inner)
@@ -490,20 +512,21 @@ class MIoTMainWindow(QMainWindow):
         else:
             self._current_user = user
 
-        # 如果本地没有 groupId，尝试从 API 获取
-        if not user.get("groupId"):
-            try:
-                ent = get_curr_enterprise(
-                    user.get("userId", ""),
-                    user.get("xiaomiiot_ph", ""),
-                    user.get("serviceToken", ""),
-                )
-                if ent.get("groupId"):
-                    user["groupId"] = ent["groupId"]
-                    user["groupName"] = ent.get("compName", "")
-                    update_user_group(user.get("userId", ""), ent["groupId"])
-            except Exception:
-                pass
+        # 启动时同步服务端当前企业（无论本地有没有 groupId）
+        try:
+            ent = get_curr_enterprise(
+                user.get("userId", ""),
+                user.get("xiaomiiot_ph", ""),
+                user.get("serviceToken", ""),
+            )
+            server_gid = str(ent.get("groupId", "")) if ent else ""
+            local_gid = str(user.get("groupId", ""))
+            if server_gid and server_gid != local_gid:
+                user["groupId"] = server_gid
+                user["groupName"] = ent.get("compName", "")
+                update_user_group(user.get("userId", ""), server_gid)
+        except Exception:
+            pass
         self._update_user_ui()
         self._fill_cookies()
 
@@ -526,6 +549,8 @@ def main():
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    font = QFont("Helvetica Neue", 13)
+    app.setFont(font)
     app.setStyleSheet(STYLESHEET)
     window = MIoTMainWindow()
     window.show()

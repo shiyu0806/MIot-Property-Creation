@@ -14,8 +14,10 @@ from miot_automation_core import read_automation_excel
 from miot_gui_common import (
     _make_log_panel,
     _make_progress,
+    _make_left_panel,
     _inject_group_id,
     _cookie_group,
+    _polish_group,
 )
 from miot_gui_workers import ExportAutomationWorker, CreateAutomationWorker
 
@@ -30,27 +32,16 @@ class ExportAutomationTab(QWidget):
     def _build(self):
         layout = QHBoxLayout(self)
 
-        left = QWidget(); left.setFixedWidth(460)
-        lv = QVBoxLayout(left)
+        left, _, lv = _make_left_panel()
 
-        # Excel 文件
-        grp_excel = QGroupBox("自动化 Excel（可选，用于补全配置）")
-        ev = QHBoxLayout()
-        self.excel_edit = QLineEdit(); self.excel_edit.setPlaceholderText("选择已有的自动化 Excel，自动读取配置")
-        btn_xl = QPushButton("浏览...")
-        btn_xl.clicked.connect(self._browse_excel)
-        ev.addWidget(self.excel_edit); ev.addWidget(btn_xl)
-        grp_excel.setLayout(ev)
-        lv.addWidget(grp_excel)
-
-        # 产品信息覆盖
-        grp_prod = QGroupBox("产品信息（可覆盖 Excel 配置）")
+        # 产品信息
+        grp_prod = QGroupBox("产品信息")
         form_prod = QFormLayout()
         self.pid_edit = QLineEdit(); self.pid_edit.setPlaceholderText("留空使用 Excel 配置")
         self.model_edit = QLineEdit(); self.model_edit.setPlaceholderText("留空使用 Excel 配置")
         form_prod.addRow("产品ID (pdId):", self.pid_edit)
         form_prod.addRow("产品型号 (model):", self.model_edit)
-        grp_prod.setLayout(form_prod)
+        _polish_group(grp_prod, form_prod)
         lv.addWidget(grp_prod)
 
         # Cookie 信息（自动填充 + 手动覆盖）
@@ -68,7 +59,7 @@ class ExportAutomationTab(QWidget):
         btn_br.clicked.connect(self._browse_out)
         row = QHBoxLayout(); row.addWidget(self.out_edit); row.addWidget(btn_br)
         ov.addRow("导出文件夹:", row)
-        grp_out.setLayout(ov)
+        _polish_group(grp_out, ov)
         lv.addWidget(grp_out)
 
         # 按钮
@@ -88,11 +79,6 @@ class ExportAutomationTab(QWidget):
         layout.addWidget(left)
         layout.addWidget(right, stretch=1)
 
-    def _browse_excel(self):
-        path, _ = QFileDialog.getOpenFileName(self, "选择自动化 Excel", "", "Excel (*.xlsx *.xls)")
-        if path:
-            self.excel_edit.setText(path)
-
     def _browse_out(self):
         path = QFileDialog.getExistingDirectory(self, "选择导出文件夹")
         if path:
@@ -106,15 +92,6 @@ class ExportAutomationTab(QWidget):
             "pdId":         self.pid_edit.text().strip(),
             "model":        self.model_edit.text().strip(),
         }
-        excel_path = self.excel_edit.text().strip()
-        if excel_path and os.path.exists(excel_path):
-            try:
-                cfg_xl, _ = read_automation_excel(excel_path)
-                for k in ("serviceToken", "xiaomiiot_ph", "userId", "pdId", "model"):
-                    if not config[k]:
-                        config[k] = cfg_xl.get(k, "")
-            except Exception:
-                pass
         missing = [k for k in ("userId", "xiaomiiot_ph", "pdId") if not config.get(k)]
         if missing:
             QMessageBox.warning(self, "提示", f"缺少必填项:\n{', '.join(missing)}")
@@ -169,8 +146,7 @@ class CreateAutomationTab(QWidget):
     def _build(self):
         layout = QHBoxLayout(self)
 
-        left = QWidget(); left.setFixedWidth(460)
-        lv = QVBoxLayout(left)
+        left, _, lv = _make_left_panel()
 
         # Excel 文件
         grp_excel = QGroupBox("自动化 Excel（包含配置 + 自动化列表）")
@@ -179,7 +155,7 @@ class CreateAutomationTab(QWidget):
         btn_xl = QPushButton("浏览...")
         btn_xl.clicked.connect(self._browse_file)
         ev.addWidget(self.excel_edit); ev.addWidget(btn_xl)
-        grp_excel.setLayout(ev)
+        _polish_group(grp_excel, ev)
         lv.addWidget(grp_excel)
 
         # 产品信息覆盖
@@ -189,7 +165,7 @@ class CreateAutomationTab(QWidget):
         self.model_edit = QLineEdit(); self.model_edit.setPlaceholderText("留空使用 Excel 配置")
         form_prod.addRow("产品ID (pdId):", self.pid_edit)
         form_prod.addRow("产品型号 (model):", self.model_edit)
-        grp_prod.setLayout(form_prod)
+        _polish_group(grp_prod, form_prod)
         lv.addWidget(grp_prod)
 
         # Cookie 信息（自动填充 + 手动覆盖）
@@ -207,7 +183,7 @@ class CreateAutomationTab(QWidget):
         self.delay_spin.setValue(500); self.delay_spin.setSingleStep(100)
         self.delay_spin.setSuffix(" ms")
         ov.addRow("请求间隔:", self.delay_spin)
-        grp_opt.setLayout(ov)
+        _polish_group(grp_opt, ov)
         lv.addWidget(grp_opt)
 
         # 按钮
@@ -216,7 +192,6 @@ class CreateAutomationTab(QWidget):
         self.btn_create.setObjectName("successBtn")
         self.btn_create.clicked.connect(self._start)
         self.btn_cancel = QPushButton("⏹ 取消")
-        self.btn_cancel.setObjectName("dangerBtn")
         self.btn_cancel.clicked.connect(self._cancel)
         self.btn_cancel.setEnabled(False)
         btn_row.addWidget(self.btn_create)
@@ -321,5 +296,3 @@ class CreateAutomationTab(QWidget):
         self.progress.setVisible(False)
         self.log.append(f"\n❌ {msg}")
         QMessageBox.critical(self, "创建失败", msg)
-
-

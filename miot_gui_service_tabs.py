@@ -8,16 +8,14 @@ from PyQt6.QtWidgets import (
     QCheckBox, QFileDialog, QSpinBox, QGroupBox, QMessageBox,
 )
 
-from miot_service_core import (
-    read_service_config_excel,
-    read_service_list_excel,
-    check_product_status,
-)
+from miot_service_core import check_product_status
 from miot_gui_common import (
     _make_log_panel,
     _make_progress,
+    _make_left_panel,
     _inject_group_id,
     _cookie_group,
+    _polish_group,
 )
 from miot_gui_workers import SyncServiceWorker, ExportServiceWorker
 
@@ -32,8 +30,7 @@ class CreateServiceTab(QWidget):
         layout = QHBoxLayout(self)
 
         # 左侧表单
-        left = QWidget(); left.setFixedWidth(460)
-        lv = QVBoxLayout(left)
+        left, _, lv = _make_left_panel()
 
         # Excel 文件
         grp_file = QGroupBox("Excel 文件（服务模板）")
@@ -42,24 +39,24 @@ class CreateServiceTab(QWidget):
         btn_browse = QPushButton("浏览...")
         btn_browse.clicked.connect(self._browse_file)
         fv.addWidget(self.file_edit); fv.addWidget(btn_browse)
-        grp_file.setLayout(fv)
+        _polish_group(grp_file, fv)
         lv.addWidget(grp_file)
 
         # 产品信息覆盖
-        grp_prod = QGroupBox("产品信息（可覆盖 Excel 配置）")
+        grp_prod = QGroupBox("产品信息")
         form_prod = QFormLayout()
-        self.pid_edit = QLineEdit(); self.pid_edit.setPlaceholderText("留空使用 Excel 配置")
-        self.model_edit = QLineEdit(); self.model_edit.setPlaceholderText("留空使用 Excel 配置")
+        self.pid_edit = QLineEdit(); self.pid_edit.setPlaceholderText("可选")
+        self.model_edit = QLineEdit(); self.model_edit.setPlaceholderText("")
         form_prod.addRow("产品ID (pdId):", self.pid_edit)
         form_prod.addRow("产品型号 (model):", self.model_edit)
-        grp_prod.setLayout(form_prod)
+        _polish_group(grp_prod, form_prod)
         lv.addWidget(grp_prod)
 
         # Cookie 覆盖
         _, self.token_edit, self.ph_edit, self.userid_edit = _cookie_group(lv, "svc_crt")
-        self.token_edit.setPlaceholderText("留空使用 Excel 配置")
-        self.ph_edit.setPlaceholderText("留空使用 Excel 配置")
-        self.userid_edit.setPlaceholderText("留空使用 Excel 配置")
+        self.token_edit.setPlaceholderText("")
+        self.ph_edit.setPlaceholderText("")
+        self.userid_edit.setPlaceholderText("")
 
         # 选项
         grp_opt = QGroupBox("选项")
@@ -68,7 +65,7 @@ class CreateServiceTab(QWidget):
         self.delay_spin.setRange(100, 2000); self.delay_spin.setValue(500)
         self.delay_spin.setSingleStep(100); self.delay_spin.setSuffix(" ms")
         form_opt.addRow("请求间隔:", self.delay_spin)
-        grp_opt.setLayout(form_opt)
+        _polish_group(grp_opt, form_opt)
         lv.addWidget(grp_opt)
 
         # 按钮
@@ -76,7 +73,7 @@ class CreateServiceTab(QWidget):
         self.btn_dry = QPushButton("🧪 干跑检查")
         self.btn_dry.clicked.connect(self._start_dry)
         self.btn_run = QPushButton("🚀 开始创建")
-        self.btn_run.setObjectName("warnBtn")
+        self.btn_run.setObjectName("successBtn")
         self.btn_run.clicked.connect(self._start_create)
         self.btn_cancel = QPushButton("取消")
         self.btn_cancel.clicked.connect(self._cancel)
@@ -214,55 +211,31 @@ class ExportServiceTab(QWidget):
     def _build(self):
         layout = QHBoxLayout(self)
 
-        left = QWidget(); left.setFixedWidth(460)
-        lv = QVBoxLayout(left)
+        left, _, lv = _make_left_panel()
 
-        # 连接信息
-        grp_conn = QGroupBox("连接信息")
-        form_conn = QFormLayout()
-        self.token_edit = QLineEdit(); self.token_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.token_edit.setPlaceholderText("serviceToken")
-        self.ph_edit = QLineEdit(); self.ph_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.ph_edit.setPlaceholderText("xiaomiiot_ph")
-        self.userid_edit = QLineEdit(); self.userid_edit.setPlaceholderText("userId")
-        self.pid_edit = QLineEdit(); self.pid_edit.setPlaceholderText("pdId（可选）")
+        # 产品信息
+        grp_prod = QGroupBox("产品信息")
+        form_prod = QFormLayout()
+        self.pid_edit = QLineEdit(); self.pid_edit.setPlaceholderText("如 33257（可选）")
         self.model_edit = QLineEdit(); self.model_edit.setPlaceholderText("如 uwize.switch.aiswi")
-        chk = QCheckBox("显示 Cookie")
-        def toggle(c):
-            mode = QLineEdit.EchoMode.Normal if c else QLineEdit.EchoMode.Password
-            self.token_edit.setEchoMode(mode); self.ph_edit.setEchoMode(mode)
-        chk.toggled.connect(toggle)
-        form_conn.addRow("serviceToken:", self.token_edit)
-        form_conn.addRow("xiaomiiot_ph:", self.ph_edit)
-        form_conn.addRow("userId:", self.userid_edit)
-        form_conn.addRow("pdId:", self.pid_edit)
-        form_conn.addRow("产品型号 (model):", self.model_edit)
-        form_conn.addRow("", chk)
-        grp_conn.setLayout(form_conn)
-        lv.addWidget(grp_conn)
+        form_prod.addRow("产品ID (pdId):", self.pid_edit)
+        form_prod.addRow("产品型号 (model):", self.model_edit)
+        _polish_group(grp_prod, form_prod)
+        lv.addWidget(grp_prod)
 
-        # 或从 Excel 读取
-        grp_excel = QGroupBox("或从 Excel 读取配置")
-        ev = QHBoxLayout()
-        self.excel_edit = QLineEdit(); self.excel_edit.setPlaceholderText("选择服务 Excel 文件")
-        btn_xl = QPushButton("浏览...")
-        btn_xl.clicked.connect(self._browse_excel)
-        ev.addWidget(self.excel_edit); ev.addWidget(btn_xl)
-        grp_excel.setLayout(ev)
-        lv.addWidget(grp_excel)
+        # Cookie 信息
+        _, self.token_edit, self.ph_edit, self.userid_edit = _cookie_group(lv, "svc_exp")
 
         # 选项
         grp_opt = QGroupBox("导出选项")
         ov = QFormLayout()
-        self.chk_props = QCheckBox("同时导出属性/事件/动作详情")
         self.out_edit = QLineEdit(); self.out_edit.setPlaceholderText("点击浏览选择导出文件夹")
         self.out_edit.setReadOnly(True)
         btn_br = QPushButton("浏览...")
         btn_br.clicked.connect(self._browse_out)
         row = QHBoxLayout(); row.addWidget(self.out_edit); row.addWidget(btn_br)
-        ov.addRow("", self.chk_props)
         ov.addRow("导出文件夹:", row)
-        grp_opt.setLayout(ov)
+        _polish_group(grp_opt, ov)
         lv.addWidget(grp_opt)
 
         # 按钮
@@ -282,11 +255,6 @@ class ExportServiceTab(QWidget):
         layout.addWidget(left)
         layout.addWidget(right, stretch=1)
 
-    def _browse_excel(self):
-        path, _ = QFileDialog.getOpenFileName(self, "选择服务 Excel", "", "Excel (*.xlsx *.xls)")
-        if path:
-            self.excel_edit.setText(path)
-
     def _browse_out(self):
         path = QFileDialog.getExistingDirectory(self, "选择导出文件夹")
         if path:
@@ -300,16 +268,6 @@ class ExportServiceTab(QWidget):
             "pdId":         self.pid_edit.text().strip(),
             "model":        self.model_edit.text().strip(),
         }
-        # 从 Excel 补全
-        excel_path = self.excel_edit.text().strip()
-        if excel_path and os.path.exists(excel_path):
-            try:
-                cfg_xl = read_service_config_excel(excel_path)
-                for k in ("serviceToken", "xiaomiiot_ph", "userId", "pdId", "model"):
-                    if not config[k]:
-                        config[k] = cfg_xl.get(k, "")
-            except Exception:
-                pass
         missing = [k for k in ("userId", "xiaomiiot_ph", "model") if not config.get(k)]
         if missing:
             QMessageBox.warning(self, "提示", f"缺少必填项:\n{', '.join(missing)}")
@@ -336,7 +294,7 @@ class ExportServiceTab(QWidget):
         self.progress.setVisible(True); self.progress.setRange(0, 0)
 
         self._worker = ExportServiceWorker(
-            config, output_path, export_props=self.chk_props.isChecked())
+            config, output_path)
         self._worker.progress.connect(self.log.append)
         self._worker.finished_ok.connect(self._done_ok)
         self._worker.finished_err.connect(self._done_err)
@@ -353,5 +311,3 @@ class ExportServiceTab(QWidget):
         self.progress.setVisible(False)
         self.log.append(f"\n❌ {msg}")
         QMessageBox.critical(self, "导出失败", msg)
-
-

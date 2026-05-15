@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <clipPath id="rounded">
+      <rect x="0" y="0" width="1024" height="1024" rx="224" ry="224"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#rounded)">
+    <rect width="1024" height="1024" fill="#FF6900"/>
+    <!-- Central chip block -->
+    <g transform="translate(512, 420)">
+      <!-- Outer square (white) -->
+      <rect x="-120" y="-120" width="240" height="240" rx="32" fill="white" opacity="0.95"/>
+      <!-- Middle square (orange) -->
+      <rect x="-80" y="-80" width="160" height="160" rx="16" fill="#FF6900"/>
+      <!-- Inner square (white) -->
+      <rect x="-52" y="-52" width="104" height="104" rx="8" fill="white"/>
+      <!-- Center dot -->
+      <circle cx="0" cy="0" r="20" fill="#FF6900"/>
+      <!-- Chip pins (top/bottom/left/right) -->
+      <rect x="-8" y="-100" width="16" height="32" rx="8" fill="white"/>
+      <rect x="-8" y="68" width="16" height="32" rx="8" fill="white"/>
+      <rect x="-100" y="-8" width="32" height="16" rx="8" fill="white"/>
+      <rect x="68" y="-8" width="32" height="16" rx="8" fill="white"/>
+      <!-- Diagonal pins -->
+      <rect x="-68" y="-68" width="16" height="16" rx="8" fill="white" opacity="0.8" transform="rotate(45, -60, -60)"/>
+      <rect x="52" y="-68" width="16" height="16" rx="8" fill="white" opacity="0.8" transform="rotate(45, 60, -60)"/>
+      <rect x="-68" y="52" width="16" height="16" rx="8" fill="white" opacity="0.8" transform="rotate(45, -60, 60)"/>
+      <rect x="52" y="52" width="16" height="16" rx="8" fill="white" opacity="0.8" transform="rotate(45, 60, 60)"/>
+    </g>
+    <!-- Connection lines to 4 outer nodes -->
+    <line x1="432" y1="340" x2="320" y2="230" stroke="white" stroke-width="6" stroke-linecap="round" opacity="0.6"/>
+    <line x1="592" y1="340" x2="704" y2="230" stroke="white" stroke-width="6" stroke-linecap="round" opacity="0.6"/>
+    <line x1="432" y1="500" x2="320" y2="610" stroke="white" stroke-width="6" stroke-linecap="round" opacity="0.6"/>
+    <line x1="592" y1="500" x2="704" y2="610" stroke="white" stroke-width="6" stroke-linecap="round" opacity="0.6"/>
+    <!-- 4 outer device nodes -->
+    <circle cx="300" cy="210" r="32" fill="white" opacity="0.85"/>
+    <circle cx="724" cy="210" r="32" fill="white" opacity="0.85"/>
+    <circle cx="300" cy="630" r="32" fill="white" opacity="0.85"/>
+    <circle cx="724" cy="630" r="32" fill="white" opacity="0.85"/>
+    <!-- MIoT text -->
+    <text x="512" y="780" text-anchor="middle" font-family="-apple-system, SF Pro Display, Helvetica, Arial, sans-serif" font-size="72" font-weight="600" fill="white" letter-spacing="10">MIoT</text>
+  </g>
+</svg>

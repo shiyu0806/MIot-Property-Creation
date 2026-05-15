@@ -283,13 +283,20 @@ def parse_service_str(svc: dict) -> dict:
 
 def read_service_config_excel(path: str) -> dict:
     """
-    读取服务 Excel 的「产品配置」Sheet（pandas 格式，列为 参数名/值）
+    读取服务 Excel 的「产品配置」Sheet（列为 参数名/值）
     返回 config dict
     """
-    import pandas as pd
-    df = pd.read_excel(path, sheet_name=0)
-    config = dict(zip(df["参数名"], df["值"]))
-    return {k: str(v) for k, v in config.items() if v is not None}
+    import openpyxl
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    ws = wb.worksheets[0]
+    config = {}
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        if len(row) >= 2 and row[0] is not None:
+            key = str(row[0]).strip()
+            val = str(row[1]).strip() if row[1] is not None else ""
+            config[key] = val
+    wb.close()
+    return config
 
 
 def read_service_list_excel(path: str) -> list[dict]:
@@ -297,11 +304,24 @@ def read_service_list_excel(path: str) -> list[dict]:
     读取服务 Excel 的「服务列表」Sheet
     返回 list of dict（列：服务ID / 服务名称 / 服务描述 / 标准化描述 / 是否标准服务）
     """
-    import pandas as pd
-    df = pd.read_excel(path, sheet_name=1)
-    df = df.dropna(subset=["服务名称"])
-    df["服务名称"] = df["服务名称"].astype(str)
-    return df.to_dict("records")
+    import openpyxl
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    ws = wb.worksheets[1] if len(wb.worksheets) > 1 else wb.worksheets[0]
+    rows = list(ws.iter_rows(values_only=True))
+    wb.close()
+    if not rows:
+        return []
+    headers = [str(h).strip() if h is not None else "" for h in rows[0]]
+    result = []
+    for row in rows[1:]:
+        record = {}
+        for i, h in enumerate(headers):
+            val = row[i] if i < len(row) else None
+            record[h] = str(val) if val is not None else ""
+        # 跳过 服务名称 为空的行
+        if record.get("服务名称", "").strip():
+            result.append(record)
+    return result
 
 
 # ─── 批量同步服务（创建 + 修正 siid）────────────────────────────
