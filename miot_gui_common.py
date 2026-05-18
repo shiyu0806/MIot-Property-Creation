@@ -7,7 +7,7 @@ import re
 
 from PyQt6.QtWidgets import (
     QLabel, QTextEdit, QProgressBar, QGroupBox, QFormLayout,
-    QLineEdit, QCheckBox, QWidget, QVBoxLayout, QScrollArea,
+    QLineEdit, QWidget, QVBoxLayout, QScrollArea,
     QHBoxLayout, QPushButton,
 )
 from PyQt6.QtCore import Qt
@@ -206,40 +206,34 @@ def _inject_group_id(config: dict):
     if cur and cur.get("groupId"):
         config["groupId"] = cur["groupId"]
 
-def _cookie_group(parent_layout, prefix: str, show_userid=True):
+def _make_cookie_fields(parent: QWidget, prefix: str, show_userid=True):
     """
-    返回 (grp, token_edit, ph_edit, userid_edit_or_None)
-    prefix 用于内部区分，不展示给用户
-    如果已登录，自动填充 Cookie 字段
-    """
-    grp = QGroupBox("Cookie 信息")
-    form = QFormLayout()
-    token = QLineEdit(); token.setEchoMode(QLineEdit.EchoMode.Password)
-    token.setPlaceholderText("浏览器 Cookie 中的 serviceToken")
-    ph = QLineEdit(); ph.setEchoMode(QLineEdit.EchoMode.Password)
-    ph.setPlaceholderText("浏览器 Cookie 中的 xiaomiiot_ph")
-    userid_edit = None
-    form.addRow("serviceToken:", token)
-    form.addRow("xiaomiiot_ph:", ph)
-    if show_userid:
-        userid_edit = QLineEdit()
-        userid_edit.setPlaceholderText("如 1097752639")
-        form.addRow("userId:", userid_edit)
+    Create hidden Cookie fields for code paths that still need credential values.
 
-    # 自动填充当前用户的 Cookie
+    The UI no longer shows a Cookie card, but login auto-fill and Excel override
+    flows still read these QLineEdit instances.
+    """
+    token = QLineEdit(parent)
+    token.setObjectName(f"{prefix}_token_edit")
+    token.setEchoMode(QLineEdit.EchoMode.Password)
+    token.setVisible(False)
+
+    ph = QLineEdit(parent)
+    ph.setObjectName(f"{prefix}_ph_edit")
+    ph.setEchoMode(QLineEdit.EchoMode.Password)
+    ph.setVisible(False)
+
+    userid_edit = None
+    if show_userid:
+        userid_edit = QLineEdit(parent)
+        userid_edit.setObjectName(f"{prefix}_userid_edit")
+        userid_edit.setVisible(False)
+
     cur = get_current_user()
     if cur:
         token.setText(cur.get("serviceToken", ""))
         ph.setText(cur.get("xiaomiiot_ph", ""))
         if userid_edit:
-            userid_edit.setText(cur.get("userId", ""))
+            userid_edit.setText(str(cur.get("userId", "")))
 
-    chk = QCheckBox("显示 Cookie")
-    def toggle(checked):
-        mode = QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
-        token.setEchoMode(mode); ph.setEchoMode(mode)
-    chk.toggled.connect(toggle)
-    form.addRow("", chk)
-    _polish_group(grp, form)
-    parent_layout.addWidget(grp)
-    return grp, token, ph, userid_edit
+    return token, ph, userid_edit

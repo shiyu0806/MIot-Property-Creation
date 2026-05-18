@@ -29,13 +29,12 @@ from miot_gui_common import (
     _make_log_panel,
     _make_progress,
     _make_left_panel,
+    _make_cookie_fields,
     _inject_group_id,
-    _cookie_group,
     _polish_group,
 )
 from miot_gui_workers import ExportPropWorker, CreateAllWorker
 from miot_reports import write_dry_run_plan, default_desktop_path
-from miot_auth import get_current_user
 
 
 class ExportPropTab(QWidget):
@@ -53,11 +52,6 @@ class ExportPropTab(QWidget):
         form = QFormLayout()
         self.pid = QLineEdit(); self.pid.setPlaceholderText("如 33257")
         self.model = QLineEdit(); self.model.setPlaceholderText("如 uwize.switch.yzw07")
-        # userId 隐藏字段，自动从登录账号获取
-        cur = get_current_user()
-        self.userid = QLineEdit()
-        self.userid.setText(str(cur.get("userId", "")) if cur else "")
-        self.userid.setVisible(False)
         self.connect_type = QSpinBox()
         self.connect_type.setRange(0, 99); self.connect_type.setValue(16)
         form.addRow("产品ID (pdId):", self.pid)
@@ -66,7 +60,7 @@ class ExportPropTab(QWidget):
         _polish_group(grp_prod, form)
         lv.addWidget(grp_prod)
 
-        _, self.token, self.ph, _ = _cookie_group(lv, "exp_prop", show_userid=False)
+        self.token, self.ph, self.userid = _make_cookie_fields(self, "exp_prop")
 
         # 输出
         grp_out = QGroupBox("输出选项")
@@ -191,10 +185,7 @@ class CreatePropTab(QWidget):
         _polish_group(grp_ov, form_ov)
         lv.addWidget(grp_ov)
 
-        _, self.token_ov, self.ph_ov, self.uid_ov = _cookie_group(lv, "crt_prop")
-        self.token_ov.setPlaceholderText("留空使用 Excel 配置")
-        self.ph_ov.setPlaceholderText("留空使用 Excel 配置")
-        self.uid_ov.setPlaceholderText("留空使用 Excel 配置")
+        self.token_ov, self.ph_ov, self.uid_ov = _make_cookie_fields(self, "crt_prop")
 
         grp_opts = QGroupBox("选项")
         form_opts = QFormLayout()

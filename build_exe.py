@@ -20,6 +20,49 @@ if sys.platform == 'win32':
 # Windows 下 PyInstaller 打印中文会编码报错，用 ASCII 名
 APP_NAME = 'MIoT_Tool' if sys.platform == 'win32' else 'MIoT平台工具'
 
+PYQT_EXCLUDES = [
+    # Keep the Widgets/WebEngine stack, but avoid collecting broad Qt modules
+    # that are not used by this app and inflate the bundle dramatically.
+    'PyQt6.Qt3DAnimation',
+    'PyQt6.Qt3DCore',
+    'PyQt6.Qt3DExtras',
+    'PyQt6.Qt3DInput',
+    'PyQt6.Qt3DLogic',
+    'PyQt6.Qt3DRender',
+    'PyQt6.QtBluetooth',
+    'PyQt6.QtCharts',
+    'PyQt6.QtDataVisualization',
+    'PyQt6.QtDesigner',
+    'PyQt6.QtGraphs',
+    'PyQt6.QtHelp',
+    'PyQt6.QtMultimedia',
+    'PyQt6.QtMultimediaWidgets',
+    'PyQt6.QtNetworkAuth',
+    'PyQt6.QtNfc',
+    'PyQt6.QtOpenGL',
+    'PyQt6.QtOpenGLWidgets',
+    'PyQt6.QtPdf',
+    'PyQt6.QtPdfWidgets',
+    'PyQt6.QtQml',
+    'PyQt6.QtQuick',
+    'PyQt6.QtQuick3D',
+    'PyQt6.QtQuickWidgets',
+    'PyQt6.QtRemoteObjects',
+    'PyQt6.QtSensors',
+    'PyQt6.QtSerialPort',
+    'PyQt6.QtSpatialAudio',
+    'PyQt6.QtSql',
+    'PyQt6.QtStateMachine',
+    'PyQt6.QtSvg',
+    'PyQt6.QtSvgWidgets',
+    'PyQt6.QtTest',
+    'PyQt6.QtTextToSpeech',
+    'PyQt6.QtWebEngineQuick',
+    'PyQt6.QtWebSockets',
+    'PyQt6.QtXml',
+    'PyQt6.uic',
+]
+
 REQUIRED_MODULES = [
     ("PyInstaller", "PyInstaller"),
     ("PyQt6", "PyQt6"),
@@ -66,13 +109,13 @@ def build():
         '--onedir',
         '--windowed',
         '--name', APP_NAME,
-        # PyQt6
-        '--collect-all', 'PyQt6',
-        '--collect-all', 'PyQt6-Qt6',
-        '--collect-all', 'PyQt6WebEngine',
+        # PyQt6: rely on PyInstaller's Qt hooks for the imported modules.
+        # Avoid --collect-all PyQt6; it pulls in Qt3D/QML/Multimedia/SQL/etc.
         '--hidden-import', 'PyQt6.QtWidgets',
         '--hidden-import', 'PyQt6.QtCore',
         '--hidden-import', 'PyQt6.QtGui',
+        '--hidden-import', 'PyQt6.QtNetwork',
+        '--hidden-import', 'PyQt6.QtWebChannel',
         '--hidden-import', 'PyQt6.QtWebEngineWidgets',
         '--hidden-import', 'PyQt6.QtWebEngineCore',
         # openpyxl
@@ -100,6 +143,9 @@ def build():
         '--hidden-import', 'create_template',
         'miot_gui.py'
     ]
+
+    for module_name in PYQT_EXCLUDES:
+        cmd.extend(['--exclude-module', module_name])
 
     # macOS 图标（如果有）
     if sys.platform == 'darwin' and os.path.exists('icon.icns'):

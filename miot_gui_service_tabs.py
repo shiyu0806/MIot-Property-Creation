@@ -8,13 +8,17 @@ from PyQt6.QtWidgets import (
     QCheckBox, QFileDialog, QSpinBox, QGroupBox, QMessageBox,
 )
 
-from miot_service_core import check_product_status
+from miot_service_core import (
+    check_product_status,
+    read_service_config_excel,
+    read_service_list_excel,
+)
 from miot_gui_common import (
     _make_log_panel,
     _make_progress,
     _make_left_panel,
+    _make_cookie_fields,
     _inject_group_id,
-    _cookie_group,
     _polish_group,
 )
 from miot_gui_workers import SyncServiceWorker, ExportServiceWorker
@@ -52,11 +56,7 @@ class CreateServiceTab(QWidget):
         _polish_group(grp_prod, form_prod)
         lv.addWidget(grp_prod)
 
-        # Cookie 覆盖
-        _, self.token_edit, self.ph_edit, self.userid_edit = _cookie_group(lv, "svc_crt")
-        self.token_edit.setPlaceholderText("")
-        self.ph_edit.setPlaceholderText("")
-        self.userid_edit.setPlaceholderText("")
+        self.token_edit, self.ph_edit, self.userid_edit = _make_cookie_fields(self, "svc_crt")
 
         # 选项
         grp_opt = QGroupBox("选项")
@@ -223,8 +223,7 @@ class ExportServiceTab(QWidget):
         _polish_group(grp_prod, form_prod)
         lv.addWidget(grp_prod)
 
-        # Cookie 信息
-        _, self.token_edit, self.ph_edit, self.userid_edit = _cookie_group(lv, "svc_exp")
+        self.token_edit, self.ph_edit, self.userid_edit = _make_cookie_fields(self, "svc_exp")
 
         # 选项
         grp_opt = QGroupBox("导出选项")

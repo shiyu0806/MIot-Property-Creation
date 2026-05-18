@@ -15,8 +15,8 @@ from miot_gui_common import (
     _make_log_panel,
     _make_progress,
     _make_left_panel,
+    _make_cookie_fields,
     _inject_group_id,
-    _cookie_group,
     _polish_group,
 )
 from miot_gui_workers import ExportAutomationWorker, CreateAutomationWorker
@@ -44,11 +44,7 @@ class ExportAutomationTab(QWidget):
         _polish_group(grp_prod, form_prod)
         lv.addWidget(grp_prod)
 
-        # Cookie 信息（自动填充 + 手动覆盖）
-        _, self.token_edit, self.ph_edit, self.userid_edit = _cookie_group(lv, "auto_exp")
-        self.token_edit.setPlaceholderText("留空使用 Excel 配置或已登录账号")
-        self.ph_edit.setPlaceholderText("留空使用 Excel 配置或已登录账号")
-        self.userid_edit.setPlaceholderText("留空使用 Excel 配置或已登录账号")
+        self.token_edit, self.ph_edit, self.userid_edit = _make_cookie_fields(self, "auto_exp")
 
         # 导出文件夹
         grp_out = QGroupBox("导出选项")
@@ -168,11 +164,7 @@ class CreateAutomationTab(QWidget):
         _polish_group(grp_prod, form_prod)
         lv.addWidget(grp_prod)
 
-        # Cookie 信息（自动填充 + 手动覆盖）
-        _, self.token_edit, self.ph_edit, self.userid_edit = _cookie_group(lv, "auto_crt")
-        self.token_edit.setPlaceholderText("留空使用 Excel 配置或已登录账号")
-        self.ph_edit.setPlaceholderText("留空使用 Excel 配置或已登录账号")
-        self.userid_edit.setPlaceholderText("留空使用 Excel 配置或已登录账号")
+        self.token_edit, self.ph_edit, self.userid_edit = _make_cookie_fields(self, "auto_crt")
 
         # 选项
         grp_opt = QGroupBox("选项")
