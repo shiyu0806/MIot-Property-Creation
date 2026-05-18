@@ -154,6 +154,15 @@ def validate_config(config: dict) -> list[str]:
     return errors
 
 
+def _service_scope_key(item: dict):
+    """Return a stable service scope for duplicate checks before service matching."""
+    for key in ("siid", "service_name", "service_desc"):
+        value = item.get(key)
+        if _has_value(value):
+            return key, str(value).strip()
+    return "__global__", ""
+
+
 def validate_items(items: list[dict], item_type: str, label: str) -> list[str]:
     """校验属性/方法/事件定义的基础字段和局部格式。"""
     errors = []
@@ -167,9 +176,10 @@ def validate_items(items: list[dict], item_type: str, label: str) -> list[str]:
                 errors.append(f"{label}第 {row_no} 行缺少必填字段: {field}")
 
         if item_type != "property" and name:
-            if name in seen_names:
+            name_key = (_service_scope_key(item), name)
+            if name_key in seen_names:
                 errors.append(f"{label}第 {row_no} 行 name 重复: {name}")
-            seen_names.add(name)
+            seen_names.add(name_key)
 
         siid = item.get("siid")
         if _has_value(siid) and safe_int(siid, -1) < 0:

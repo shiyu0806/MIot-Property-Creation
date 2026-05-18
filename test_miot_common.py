@@ -293,11 +293,19 @@ class TestValidation(unittest.TestCase):
 
     def test_validate_items_duplicate_name(self):
         items = [
-            {"name": "toggle", "description": "切换"},
-            {"name": "toggle", "description": "切换2"},
+            {"name": "toggle", "description": "切换", "service_desc": "开关一键"},
+            {"name": "toggle", "description": "切换2", "service_desc": "开关一键"},
         ]
         errors = validate_items(items, "action", "方法定义")
         assert any("name 重复" in e for e in errors)
+
+    def test_validate_items_allows_duplicate_name_across_services(self):
+        items = [
+            {"name": "toggle", "description": "切换1", "service_desc": "开关一键"},
+            {"name": "toggle", "description": "切换2", "service_desc": "开关二键"},
+            {"name": "toggle", "description": "切换3", "service_desc": "开关三键"},
+        ]
+        assert validate_items(items, "action", "方法定义") == []
 
     def test_validate_tasks_rejects_missing_siid(self):
         tasks = [{"index": 1, "name": "on", "siid": "?"}]
