@@ -332,6 +332,7 @@ def sync_services(
     dry_run: bool = False,
     delay: float = 0.0,
     log_fn=None,
+    progress_fn=None,
     cancelled_fn=None,
 ) -> dict:
     """
@@ -379,12 +380,14 @@ def sync_services(
     log(f"平台已有 {len(all_services)} 个服务")
 
     total = len(service_rows)
-    log(f"Excel 中有 {total} 个服务待处理\n")
+    log(f"🚀 开始处理 {total} 条服务" + (" (dry-run)" if dry_run else "") + "\n")
 
     results = []
     created = skipped = fixed = errors = 0
 
     for row_num, row in enumerate(service_rows, 1):
+        if progress_fn:
+            progress_fn(row_num, total)
         if is_cancelled():
             log("\n⚠️ 已取消")
             break
@@ -401,68 +404,76 @@ def sync_services(
 
         key = (name, desc)
 
+        service_desc = desc or norm_desc or "-"
+
         if key in existing:
             actual_siid = int(existing[key].get("siid", 0))
             if expected_siid and actual_siid != expected_siid:
-                log(f"[{row_num}/{total}] 🔧 {name} siid={actual_siid}→{expected_siid} 修正中...")
+                log(f"[{row_num}/{total}] [服务] {name} → siid={expected_siid} ({service_desc}) ...")
+                log(f"    🔧 siid {actual_siid} → {expected_siid} 修正中...")
                 if not dry_run:
                     svc_id = existing[key].get("serviceId", actual_siid)
                     ok, r = modify_with_retry(modify_siid, config, svc_id, actual_siid, expected_siid, log_fn=log)
                     if ok:
-                        log(f"    ✅ 修正成功")
+                        log(f"    ✅ [服务] {name} 成功 (siid={expected_siid}, 已修正)")
                         fixed += 1
                         results.append({"name": name, "action": "fix", "siid": expected_siid})
                         if delay > 0:
                             time.sleep(delay)
                     else:
-                        log(f"    ❌ 修正失败(已重试3次): {r}")
+                        msg = response_message(r, str(r)) if isinstance(r, dict) else str(r)
+                        log(f"    ❌ [服务] {name} 失败 (siid修正失败: {msg})")
                         errors += 1
-                        results.append({"name": name, "action": "fix_fail", "siid": actual_siid, "error": str(r)})
+                        results.append({"name": name, "action": "fix_fail", "siid": actual_siid, "error": msg})
                         log("\n⛔ 修正失败，停止创建")
                         break
                 else:
-                    log(f"    [干跑] 需要修正 siid {actual_siid} → {expected_siid}")
+                    log(f"    🧪 [服务] {name} 将修正 (siid {actual_siid} → {expected_siid})")
                     fixed += 1
             else:
-                log(f"[{row_num}/{total}] ⏭️ {name} siid={actual_siid} 已存在，跳过")
+                log(f"[{row_num}/{total}] [服务] {name} → siid={actual_siid} ({service_desc}) ...")
+                log(f"    ⏭️ [服务] {name} 已存在，跳过")
                 skipped += 1
                 results.append({"name": name, "action": "skip", "siid": actual_siid})
         else:
-            log(f"[{row_num}/{total}] 🆕 {name} 创建中...")
+            target_siid = expected_siid if expected_siid else "自动"
+            log(f"[{row_num}/{total}] [服务] {name} → siid={target_siid} ({service_desc}) ...")
             if not dry_run:
                 r = create_service(config, name, desc, norm_desc, standard)
                 new_siid = r.get("siid")
                 if new_siid:
                     if expected_siid and new_siid != expected_siid:
-                        log(f"    siid={new_siid}，期望={expected_siid}，修正中...")
+                        log(f"    🔧 siid {new_siid} → {expected_siid} 修正中...")
                         svc_data = r.get("data") or r.get("result")
                         svc_id = svc_data.get("serviceId") if isinstance(svc_data, dict) else new_siid
                         ok_f, fr = modify_with_retry(modify_siid, config, svc_id or new_siid, new_siid, expected_siid, log_fn=log)
                         if ok_f:
-                            log(f"    ✅ 创建成功 siid={expected_siid} (修正自{new_siid})")
+                            log(f"    ✅ [服务] {name} 成功 (siid={expected_siid}, 已修正)")
                             created += 1
                             results.append({"name": name, "action": "create_fix", "siid": expected_siid, "original_siid": new_siid})
                         else:
-                            log(f"    ⚠️ 创建成功 siid={new_siid}，修正到{expected_siid}失败(已重试3次)")
+                            msg = response_message(fr, str(fr)) if isinstance(fr, dict) else str(fr)
+                            log(f"    ❌ [服务] {name} 失败 (siid修正失败: {msg})")
                             errors += 1
-                            results.append({"name": name, "action": "create_fix_fail", "siid": new_siid, "expected_siid": expected_siid})
+                            results.append({"name": name, "action": "create_fix_fail", "siid": new_siid, "expected_siid": expected_siid, "error": msg})
                             log("\n⛔ siid修正失败，停止创建")
                             break
                     else:
-                        log(f"    ✅ 创建成功 siid={new_siid}")
+                        log(f"    ✅ [服务] {name} 成功 (siid={new_siid})")
                         created += 1
                         results.append({"name": name, "action": "create", "siid": new_siid})
                     if delay > 0:
                         time.sleep(delay)
                 else:
-                    log(f"    ❌ 创建失败: {r}")
+                    msg = response_message(r, str(r)) if isinstance(r, dict) else str(r)
+                    log(f"    ❌ [服务] {name} 失败 ({msg})")
                     errors += 1
-                    results.append({"name": name, "action": "fail", "error": str(r)})
+                    results.append({"name": name, "action": "fail", "error": msg})
             else:
-                log(f"    [干跑] 将创建")
+                log(f"    🧪 [服务] {name} 将创建")
                 created += 1
 
-    summary = f"\n{'='*40}\n完成！创建: {created} | 跳过: {skipped} | 修正: {fixed} | 错误: {errors}"
+    summary = f"\n{'='*40}\n📊 完成 创建:{created} 跳过:{skipped} 修正:{fixed} 错误:{errors}"
     log(summary)
 
     return {

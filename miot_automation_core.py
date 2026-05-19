@@ -27,6 +27,7 @@ import time
 
 from miot_service_core import check_product_status
 from miot_common import (
+    ApiAuthError,
     BASE as _BASE,
     DEFAULT_HEADERS as _DEFAULT_HEADERS,
     build_cookies as _build_cookies,
@@ -735,6 +736,7 @@ def sync_automations(config: dict, auto_items: list,
                      dry_run: bool = False,
                      delay: float = 0.5,
                      log_fn=None,
+                     progress_fn=None,
                      cancelled_fn=None) -> dict:
     """
     批量创建自定义自动化
@@ -762,7 +764,12 @@ def sync_automations(config: dict, auto_items: list,
         if source_model:
             log_fn and log_fn(f"  🔄 Model 替换: {source_model} → {config.get('model', '')}")
 
+    total = len(auto_items)
+    log_fn and log_fn(f"🚀 开始处理 {total} 条自动化" + (" (dry-run)" if dry_run else "") + "\n")
+
     for i, item in enumerate(auto_items):
+        if progress_fn:
+            progress_fn(i + 1, total)
         if cancelled_fn and cancelled_fn():
             log_fn and log_fn("⚠️ 已取消")
             break
@@ -770,35 +777,46 @@ def sync_automations(config: dict, auto_items: list,
         intro = item.get("intro", f"自动化{i+1}")
         tr_type = item.get("_trType", "then")
         type_label = "执行动作" if tr_type == "then" else "触发条件"
-        log_fn and log_fn(f"[{i+1}/{len(auto_items)}] [{type_label}] 处理: {intro}")
+        log_fn and log_fn(f"[{i+1}/{total}] [{type_label}] {intro} → type={tr_type} ...")
 
         if dry_run:
-            log_fn and log_fn(f"  🔍 [dry-run] 将创建{type_label}: {intro}")
+            log_fn and log_fn(f"  🧪 [{type_label}] {intro} 将创建")
             results["skipped"].append({"intro": intro, "type": tr_type, "reason": "dry-run"})
             continue
 
         try:
             # 先检查标准自动化
-            log_fn and log_fn(f"  🔍 检查标准自动化...")
+            log_fn and log_fn(f"  🔍 [{type_label}] {intro} 检查标准自动化...")
             check_result = check_standard_automation(config, item)
-            log_fn and log_fn(f"  📋 检查结果: {json.dumps(check_result, ensure_ascii=False)[:200]}")
+            if not is_success_response(check_result):
+                msg = response_message(check_result, json.dumps(check_result, ensure_ascii=False))
+                log_fn and log_fn(f"  ⚠️ [{type_label}] {intro} 标准检查提示 ({msg})")
 
             # 保存
             save_result = save_automation(config, item)
-            log_fn and log_fn(f"  📋 保存结果: {json.dumps(save_result, ensure_ascii=False)[:300]}")
             if is_success_response(save_result):
-                log_fn and log_fn(f"  ✅ 创建成功: {intro}")
+                log_fn and log_fn(f"  ✅ [{type_label}] {intro} 成功")
                 results["success"].append({"intro": intro, "type": tr_type, "result": save_result})
             else:
                 msg = response_message(save_result, json.dumps(save_result, ensure_ascii=False))
-                log_fn and log_fn(f"  ❌ 创建失败: {intro} ({msg})")
+                log_fn and log_fn(f"  ❌ [{type_label}] {intro} 失败 ({msg})")
                 results["failed"].append({"intro": intro, "type": tr_type, "error": msg, "result": save_result})
         except Exception as e:
-            log_fn and log_fn(f"  ❌ 异常: {intro} ({e})")
+            if isinstance(e, ApiAuthError):
+                log_fn and log_fn(f"  ⛔ [{type_label}] {intro} {e}")
+                log_fn and log_fn("⛔ 已停止创建，请重新登录后再执行")
+                results["failed"].append({"intro": intro, "type": tr_type, "error": str(e)})
+                break
+            log_fn and log_fn(f"  ❌ [{type_label}] {intro} 异常 ({e})")
             results["failed"].append({"intro": intro, "type": tr_type, "error": str(e)})
 
         if delay > 0:
             time.sleep(delay)
+
+    log_fn and log_fn(
+        f"\n{'='*40}\n📊 完成 成功:{len(results['success'])} "
+        f"失败:{len(results['failed'])} 跳过:{len(results['skipped'])}"
+    )
 
     return results
 

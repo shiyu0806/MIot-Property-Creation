@@ -165,11 +165,14 @@ class CreateServiceTab(QWidget):
 
         self.log.append(f"{'🧪 干跑模式' if dry_run else '🚀 正式创建'} - {len(rows)} 个服务\n")
         self._set_btns(running=True)
-        self.progress.setVisible(True); self.progress.setRange(0, 0)
+        self.progress.setVisible(True)
+        self.progress.setRange(0, len(rows))
+        self.progress.setValue(0)
 
         self._worker = SyncServiceWorker(config, rows, dry_run,
                                           self.delay_spin.value() / 1000.0)
         self._worker.progress.connect(self.log.append)
+        self._worker.update_progress.connect(lambda c, t: self.progress.setValue(c))
         self._worker.finished_ok.connect(self._done_ok)
         self._worker.finished_err.connect(self._done_err)
         self._worker.start()
@@ -181,6 +184,7 @@ class CreateServiceTab(QWidget):
 
     def _done_ok(self, res):
         self._set_btns(running=False)
+        self.progress.setVisible(False)
         summary = f"创建:{res['created']} 跳过:{res['skipped']} 修正:{res['fixed']} 错误:{res['errors']}"
         self.log.append(f"\n📊 {summary}")
         if res["errors"]:

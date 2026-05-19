@@ -257,7 +257,7 @@ class CreatePropWorker(QThread):
                 sname = svc.get("description", svc.get("name", "")) if svc else "未匹配"
                 body = build_request_body(prop, self.config, svc)
                 self.update_progress.emit(i + 1, len(self.props))
-                self.progress.emit(f"  [{i+1}] {name} → siid={siid} ({sname}) ...")
+                self.progress.emit(f"[{i+1}/{len(self.props)}] [属性] {name} → siid={siid} ({sname}) ...")
                 try:
                     resp = create_property(body, self.config)
                     if is_success_response(resp):
@@ -354,7 +354,7 @@ class CreateAllWorker(QThread):
                 sname = svc.get("description", svc.get("name", "")) if svc else "未匹配"
                 body = build_fn(item, self.config, svc)
                 self.update_progress.emit(i + 1, len(self.tasks))
-                self.progress.emit(f"  [{i+1}][{type_label}] {name} → siid={siid} ({sname}) ...")
+                self.progress.emit(f"[{i+1}/{len(self.tasks)}] [{type_label}] {name} → siid={siid} ({sname}) ...")
                 try:
                     resp = create_fn(body, self.config)
                     if is_success_response(resp):
@@ -424,6 +424,7 @@ class CreateAllWorker(QThread):
 class SyncServiceWorker(QThread):
     """批量同步服务（创建 / 修正 siid）"""
     progress    = pyqtSignal(str)
+    update_progress = pyqtSignal(int, int)
     finished_ok  = pyqtSignal(dict)
     finished_err = pyqtSignal(str)
 
@@ -442,6 +443,7 @@ class SyncServiceWorker(QThread):
                 self.config, self.service_rows,
                 dry_run=self.dry_run,
                 log_fn=self.progress.emit,
+                progress_fn=self.update_progress.emit,
                 cancelled_fn=lambda: self._cancel,
                 delay=self.delay,
             )
@@ -509,6 +511,7 @@ class CreateAutomationWorker(QThread):
                 dry_run=self.dry_run,
                 delay=self.delay,
                 log_fn=self.progress.emit,
+                progress_fn=self.update_progress.emit,
                 cancelled_fn=lambda: self._cancel,
             )
             s = len(result["success"])
