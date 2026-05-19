@@ -43,6 +43,7 @@ from miot_automation_core import (
     write_automation_export_excel,
 )
 from miot_common import (
+    ApiAuthError,
     parse_json_response,
     is_success_response,
     response_message,
@@ -298,6 +299,12 @@ class CreatePropWorker(QThread):
                         failed += 1
                         results.append({"name": name, "status": "failed", "error": msg, "siid": siid})
                 except Exception as e:
+                    if isinstance(e, ApiAuthError):
+                        self.progress.emit(f"  ⛔ {e}")
+                        self.progress.emit("⛔ 已停止创建，请重新登录后再执行")
+                        failed += 1
+                        results.append({"name": name, "status": "auth_error", "error": str(e), "siid": siid})
+                        break
                     self.progress.emit(f"  ❌ {name} 异常 ({e})")
                     failed += 1
                     results.append({"name": name, "status": "error", "error": str(e), "siid": siid})
@@ -391,6 +398,12 @@ class CreateAllWorker(QThread):
                         failed += 1
                         results.append({"type": type_label, "name": name, "status": "failed", "error": msg, "siid": siid})
                 except Exception as e:
+                    if isinstance(e, ApiAuthError):
+                        self.progress.emit(f"  ⛔ [{type_label}] {name} {e}")
+                        self.progress.emit("⛔ 已停止创建，请重新登录后再执行")
+                        failed += 1
+                        results.append({"type": type_label, "name": name, "status": "auth_error", "error": str(e), "siid": siid})
+                        break
                     self.progress.emit(f"  ❌ [{type_label}] {name} 异常 ({e})")
                     failed += 1
                     results.append({"type": type_label, "name": name, "status": "error", "error": str(e), "siid": siid})
@@ -615,4 +628,3 @@ class ExportServiceWorker(QThread):
             self.finished_ok.emit(self.output_path)
         except Exception:
             self.finished_err.emit(f"导出失败:\n{traceback.format_exc()}")
-

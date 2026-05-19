@@ -17,6 +17,7 @@ from openpyxl import Workbook
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from miot_common import (
+    ApiAuthError,
     build_cookies, build_params, build_headers, safe_int, safe_request,
     parse_json_response, is_success_response, response_message,
     BASE, DEFAULT_HEADERS, TEMPLATE_VERSION,
@@ -109,12 +110,24 @@ class TestApiResponseHelpers(unittest.TestCase):
         resp.json.side_effect = ValueError("no json")
         try:
             parse_json_response(resp, "测试 API")
-        except RuntimeError as exc:
+        except ApiAuthError as exc:
             msg = str(exc)
             assert "测试 API 返回非 JSON" in msg
             assert "登录态失效" in msg
         else:
             raise AssertionError("parse_json_response should reject non-json responses")
+
+    def test_parse_json_response_raises_auth_error_on_401(self):
+        resp = Mock(status_code=401, text="")
+        resp.json.side_effect = ValueError("no json")
+        try:
+            parse_json_response(resp, "创建属性 API")
+        except ApiAuthError as exc:
+            msg = str(exc)
+            assert "鉴权失败" in msg
+            assert "请重新登录" in msg
+        else:
+            raise AssertionError("parse_json_response should reject unauthorized responses")
 
     def test_parse_json_response_rejects_list(self):
         resp = Mock(status_code=200)

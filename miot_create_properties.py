@@ -27,6 +27,7 @@ __all__ = [
 ]
 
 from miot_common import (
+    ApiAuthError,
     BASE,
     DEFAULT_HEADERS as HEADERS,
     build_cookies as _build_cookies,
@@ -613,6 +614,12 @@ def batch_create(tasks: list[dict], create_fn, config: dict,
                 failed += 1
                 results.append({"name": t["name"], "status": "failed", "error": msg, "siid": t["siid"]})
         except Exception as e:
+            if isinstance(e, ApiAuthError):
+                print(f"⛔ 鉴权失败 ({e})")
+                failed += 1
+                results.append({"name": t["name"], "status": "auth_error", "error": str(e), "siid": t["siid"]})
+                print("\n⛔ 已停止创建，请重新登录后再执行")
+                break
             print(f"❌ 异常 ({e})")
             failed += 1
             results.append({"name": t["name"], "status": "error", "error": str(e), "siid": t["siid"]})

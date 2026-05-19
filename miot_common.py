@@ -13,7 +13,7 @@ __all__ = [
     "TEMPLATE_VERSION",
     "build_cookies", "build_params", "build_headers", "safe_request",
     "parse_json_response", "is_success_response", "response_message",
-    "safe_int",
+    "safe_int", "ApiAuthError",
     "PROPERTY_COLUMNS", "ACTION_COLUMNS", "EVENT_COLUMNS",
 ]
 
@@ -97,8 +97,17 @@ def safe_request(
 
 # ─── API 响应解析 ─────────────────────────────────────────────
 
+class ApiAuthError(RuntimeError):
+    """Raised when MIoT rejects a request because login credentials are invalid."""
+
+
 def parse_json_response(resp: requests.Response, context: str = "API") -> dict:
     """解析 JSON 响应；非 JSON 时给出更可读的登录/响应异常提示。"""
+    if resp.status_code in (401, 403):
+        raise ApiAuthError(
+            f"{context} 鉴权失败 (HTTP {resp.status_code})：登录态失效或 Cookie 不正确，请重新登录后再试"
+        )
+
     try:
         data = resp.json()
     except Exception:
@@ -107,6 +116,7 @@ def parse_json_response(resp: requests.Response, context: str = "API") -> dict:
         hint = ""
         if "<html" in lower or "login" in lower or "passport" in lower:
             hint = "。常见原因：Cookie 过期或登录态失效，请重新登录"
+            raise ApiAuthError(f"{context} 返回非 JSON (HTTP {resp.status_code}): {text}{hint}")
         raise RuntimeError(f"{context} 返回非 JSON (HTTP {resp.status_code}): {text}{hint}")
 
     if not isinstance(data, dict):
